@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#8a5a3b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Library">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/styles.css">
+<title>Bertucci Library</title>
+</head>
+<body>
+
+<!-- ============================================================ LIBRARY -->
+<section class="view" id="view-library" data-view="library">
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1 class="brand">Library</h1>
+      <div class="topbar-right">
+        <span class="count" id="lib-count"></span>
+        <button class="syncbtn" id="sync-btn" hidden title="Sync with Google Sheet">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-.6 3"/><path d="M20 5v6h-6"/></svg>
+          <span class="syncbtn-label" id="sync-label">Sync</span>
+        </button>
+      </div>
+    </div>
+    <div class="searchbar">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="Search titles, topics, authors…"
+             autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+      <button id="search-clear" class="search-clear" hidden aria-label="Clear search">&times;</button>
+    </div>
+    <div class="chips" id="kind-chips" role="group" aria-label="Filter by type"></div>
+  </header>
+
+  <main class="scroll" id="lib-scroll">
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="lib-empty" hidden>
+      <p class="empty-title">Nothing here</p>
+      <p class="empty-sub" id="lib-empty-sub"></p>
+    </div>
+    <div class="loadmore-wrap">
+      <button class="btn ghost" id="load-more" hidden>Load more</button>
+    </div>
+    <div class="spinner" id="lib-spinner" hidden><i></i></div>
+  </main>
+</section>
+
+<!-- ================================================================ ASK -->
+<section class="view" id="view-ask" data-view="ask" hidden>
+  <header class="topbar">
+    <div class="topbar-row">
+      <h1 class="brand">Ask</h1>
+      <button class="btn tiny ghost" id="chat-reset">New</button>
+    </div>
+  </header>
+
+  <main class="scroll chat" id="chat"></main>
+
+  <form class="composer" id="ask-form">
+    <textarea id="ask-input" rows="1" placeholder="Ask about your collection…"
+              enterkeyhint="send" autocomplete="off"></textarea>
+    <button class="send" id="ask-send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+    </button>
+  </form>
+</section>
+
+<!-- ================================================================ ADD -->
+<section class="view" id="view-add" data-view="add" hidden>
+  <header class="topbar">
+    <div class="topbar-row"><h1 class="brand">Add</h1></div>
+  </header>
+
+  <main class="scroll pad">
+    <div class="card" id="sheet-card" hidden>
+      <h2 class="card-title">Google Sheet</h2>
+      <p class="card-sub" id="sheet-sub"></p>
+      <div class="row">
+        <button class="btn primary" id="sheet-sync-btn" style="flex:1">
+          <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-.6 3"/><path d="M20 5v6h-6"/></svg>
+          Sync now
+        </button>
+        <a class="btn ghost" id="sheet-open" target="_blank" rel="noopener">Open</a>
+      </div>
+      <div id="sheet-status" class="status" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Scan a photo</h2>
+      <p class="card-sub">Take a picture of a shelf or a stack of covers. Claude reads the
+        titles and looks each one up — you review everything before it's saved.</p>
+      <label class="btn primary block" for="photo-input">
+        <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        Take or choose a photo
+      </label>
+      <input id="photo-input" type="file" accept="image/*" capture="environment" hidden>
+      <div id="scan-status" class="status" hidden></div>
+      <div id="scan-results"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Add by ISBN</h2>
+      <p class="card-sub">Type or paste the number under the barcode.</p>
+      <form id="isbn-form" class="row">
+        <input id="isbn-input" type="text" inputmode="numeric" autocomplete="off"
+               placeholder="978…" enterkeyhint="go">
+        <button class="btn primary" type="submit">Find</button>
+      </form>
+      <div id="isbn-status" class="status" hidden></div>
+      <div id="isbn-result"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Add manually</h2>
+      <p class="card-sub">For board games, craft supplies, printed curriculum — anything
+        without a barcode.</p>
+      <form id="manual-form" class="stack">
+        <label class="field">
+          <span>Type</span>
+          <select id="m-kind"></select>
+        </label>
+        <label class="field">
+          <span>Title <b>*</b></span>
+          <input id="m-title" type="text" required autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Author / publisher / designer</span>
+          <input id="m-creator" type="text" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Subjects</span>
+          <input id="m-subject" type="text" placeholder="Botany, Observation" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Age range</span>
+          <input id="m-age" type="text" placeholder="6–9" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Where it lives</span>
+          <input id="m-location" type="text" placeholder="Playroom shelf, bin 3" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Notes</span>
+          <textarea id="m-notes" rows="2"></textarea>
+        </label>
+        <button class="btn primary block" type="submit">Add to library</button>
+        <div id="manual-status" class="status" hidden></div>
+      </form>
+    </div>
+  </main>
+</section>
+
+<!-- ============================================================== DETAIL -->
+<div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+<aside class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-label="Item details">
+  <button class="sheet-grip" id="sheet-close" aria-label="Close"></button>
+  <div class="sheet-body" id="sheet-body"></div>
+</aside>
+
+<!-- ================================================================ NAV -->
+<nav class="tabbar" role="tablist">
+  <button class="tab active" data-goto="library" role="tab" aria-selected="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4zM20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg>
+    <span>Library</span>
+  </button>
+  <button class="tab" data-goto="ask" role="tab" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 1 1-3.2-6.4"/><path d="M9.5 9a2.6 2.6 0 1 1 3.2 2.5c-.8.3-1.2.9-1.2 1.7v.4"/><circle cx="11.5" cy="17" r="1" fill="currentColor" stroke="none"/></svg>
+    <span>Ask</span>
+  </button>
+  <button class="tab" data-goto="add" role="tab" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    <span>Add</span>
+  </button>
+</nav>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>

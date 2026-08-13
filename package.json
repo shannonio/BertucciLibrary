@@ -1,0 +1,27 @@
+{
+  "name": "bertucci-library",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Home library + homeschool resource catalog",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "import": "node scripts/import-csv.js",
+    "enrich": "node scripts/enrich.js",
+    "setup": "npm run import && npm run enrich",
+    "sheet:init": "node scripts/sheet-init.js",
+    "sheet:pull": "node scripts/sheet-pull.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "google-auth-library": "^11.0.2",
+    "multer": "^2.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
