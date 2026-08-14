@@ -31,9 +31,11 @@ CREATE TABLE IF NOT EXISTS items (
   publisher    TEXT,
   published    TEXT,
   page_count   INTEGER,
-  age_range    TEXT,              -- "6-9", "K-2", etc.
-  players      TEXT,              -- board games: "2-4"
-  play_minutes INTEGER,
+  age_range    TEXT,              -- "6-9", "K-2", "8+"
+  players      TEXT,              -- board games: "2-4", "1+"
+  -- Free text, not a number: real game boxes say "20-30 min" or "Varies", and
+  -- rounding those to a single integer throws away the useful part.
+  play_time    TEXT,
   location     TEXT,              -- which shelf/bin it lives on
   notes        TEXT,
   tags         TEXT,              -- comma-separated, user-defined
@@ -127,6 +129,25 @@ BEGIN
 END;
 `);
 
+// --- migrations ------------------------------------------------------------
+// Small, idempotent schema fixes for databases created by an earlier version.
+{
+  const cols = () => db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
+
+  // `play_minutes` was an INTEGER, which cannot hold the values real game boxes
+  // print — "20-30 min", "Varies". Replaced by the TEXT column `play_time`.
+  if (!cols().includes('play_time')) {
+    db.exec('ALTER TABLE items ADD COLUMN play_time TEXT');
+  }
+  if (cols().includes('play_minutes')) {
+    db.exec(`
+      UPDATE items SET play_time = CAST(play_minutes AS TEXT)
+      WHERE play_time IS NULL AND play_minutes IS NOT NULL
+    `);
+    db.exec('ALTER TABLE items DROP COLUMN play_minutes');
+  }
+}
+
 export const ITEM_KINDS = [
   'book',
   'boardgame',
@@ -158,7 +179,7 @@ export function ftsQuery(raw, join = 'AND') {
 const COLUMNS = [
   'id', 'kind', 'title', 'creator', 'genre', 'subject', 'summary', 'isbn',
   'isbn10', 'cover_url', 'publisher', 'published', 'page_count', 'age_range',
-  'players', 'play_minutes', 'location', 'notes', 'tags', 'quantity',
+  'players', 'play_time', 'location', 'notes', 'tags', 'quantity',
   'file_path', 'source', 'enrich_state', 'created_at', 'updated_at',
 ];
 
@@ -245,7 +266,7 @@ export const NOT_NULL_DEFAULTS = {
 const INSERT_FIELDS = [
   'kind', 'title', 'creator', 'genre', 'subject', 'summary', 'isbn', 'isbn10',
   'cover_url', 'publisher', 'published', 'page_count', 'age_range', 'players',
-  'play_minutes', 'location', 'notes', 'tags', 'quantity', 'file_path',
+  'play_time', 'location', 'notes', 'tags', 'quantity', 'file_path',
   'source', 'enrich_state',
 ];
 

@@ -76,6 +76,26 @@ The Sheet is the **source of truth**. `data/library.db` is a derived copy that
 keeps search, covers, and the Ask tab fast — you can delete it and rebuild the
 whole catalog with `npm run sheet:pull`.
 
+### Tabs
+
+One tab per kind of thing. Which tab an item lives in is decided by its `kind`
+column, so changing `kind` moves the row to the matching tab on the next sync.
+
+| Tab | Holds |
+|---|---|
+| **Books** | `book` |
+| **Board Games** | `boardgame` |
+| **Other Resources** | `curriculum`, `material`, `media` |
+
+Every tab uses the same columns, so an item can move between them freely.
+Irrelevant columns just stay blank — games have no ISBN, books have no player
+count. Renaming a tab is fine (a tab called "Games" still matches "Board
+Games"), and any tab *without* an `id` and `title` header is left alone, so you
+can keep scratch or notes tabs in the same spreadsheet.
+
+A row typed into a tab inherits that tab's kind, so you don't have to fill in
+the `kind` cell by hand when adding a game to the Board Games tab.
+
 - **You edit the Sheet** → the app pulls those changes when you open it, or when
   you tap the sync arrow next to the item count.
 - **You add in the app** (ISBN, photo scan, manual) → the row appears in the
@@ -155,6 +175,102 @@ explicitly shared with it.
 
 ---
 
+---
+
+## Why board games have no cover art
+
+Short version: there is no free, legal source for board game box art, so the
+games show designed cards instead of photos.
+
+What was tried:
+
+| Source | Why it didn't work |
+|---|---|
+| **BoardGameGeek** | Has box art for essentially every game here. Their XML API now returns `401 Unauthorized` on every endpoint — a policy change, not a rate limit. |
+| **Wikipedia** | Matches were wrong. "Mycelia" resolved to *Avatar: Fire and Ash*; "Monopoly Jackpot" to generic Monopoly. |
+| **Wikidata** | Matches were correct (entity-typed, so no wrong-topic hits) but the images are Creative Commons *gameplay photos* — a table mid-game, not a box. Box art is copyrighted, so Commons can't host it. Roughly half of famous games, almost none of the educational ones. |
+
+A wrong or irrelevant photo is worse than none, so instead each game gets a card
+showing its genre, player count, play time, and age — the things that decide
+whether it fits the afternoon. Colour is derived from genre, so the shelf groups
+visually by type of game.
+
+### Getting real art for a game
+
+Paste an image URL into that game's `cover_url` cell in the **Board Games** tab.
+It appears in the app on the next sync. This works for any item, and is the
+reliable way to give a favourite game its real box.
+
+To make that less tedious:
+
+```bash
+npm run game:links
+```
+
+This puts a **"search BGG"** link beside every game still missing art, in
+column Z of the Board Games tab. Click it, open the game, right-click the box
+image, *Copy Image Address*, paste into that row's `cover_url`. Games that
+already have art show "done" instead.
+
+Column Z sits outside the synced range (A–Y), so sync never reads or overwrites
+it — verified against both a pull and a push. Delete the column when you're
+finished.
+
+**Why this isn't automatic:** BGG serves the whole site behind Cloudflare bot
+protection (`cf-mitigated: challenge`). Browsing it yourself is exactly what
+that's built for; getting a script past it means defeating an access control
+they deliberately deployed, which this project won't do.
+
+Their image CDN (`cf.geekdo-images.com`) has no such protection and no referrer
+check, so a URL you copy from a game page works directly — and is cached locally
+the moment it syncs.
+
+---
+
+## Cover images are stored locally
+
+Every cover is downloaded once into `data/covers/` and served from your Mac.
+The catalog and the Sheet still hold the original URL — that's the record of
+where the art came from — while the app renders the local copy.
+
+Why it matters:
+
+- **Speed.** ~2 ms from disk versus ~330 ms from Open Library. On a grid of 60
+  covers that's the difference between instant and a visible load-in.
+- **Durability.** If Open Library reorganises, or BGG starts blocking hotlinks,
+  your covers keep working. Nothing breaks silently later.
+- **Courtesy.** One request per image, ever — instead of one per page view.
+
+```bash
+npm run covers              # fetch anything not yet held
+npm run covers -- --retry   # re-attempt previous failures
+```
+
+Covers are also cached automatically when you add an item in the app, and when a
+sync brings in a URL you pasted into the Sheet. Current cache: **862 images,
+~36 MB**.
+
+`data/covers/` is disposable — delete it and re-run `npm run covers` to rebuild
+from the stored URLs. It's excluded from git.
+
+If an image can't be fetched, the item simply keeps loading from its original
+URL, and if *that* fails the app falls back to the typeset card. There's no
+state where you get an empty box.
+
+If a URL is wrong, dead, or the host blocks hotlinking, the app falls back to
+the designed card rather than showing an empty box — including for URLs that
+hang instead of returning an error.
+
+### If BoardGameGeek access becomes available
+
+If you have (or can get) BGG API credentials, wiring in automatic covers is a
+contained job: one lookup function alongside the Open Library / Google Books
+ones in `server/lookup.js`, plus a branch in `scripts/enrich.js` for
+`kind = 'boardgame'`. BGG would also fill in the empty `creator` field with
+game designers.
+
+---
+
 ## Adding things beyond books
 
 The catalog was built generic from the start. Every item has a **kind**:
@@ -179,16 +295,37 @@ MVP doesn't upload or serve those files yet — see *Not built yet* below.
 
 ---
 
-## Re-importing the CSV
+## Importing a CSV
 
 ```bash
-npm run import                    # book_catalog.csv
-npm run import -- some-other.csv
+npm run import                        # book_catalog.csv
+npm run import game_catalog.csv
+npm run import supplies.csv --kind=material
 ```
 
-Safe to re-run. Matching is on title + author, so a corrected CSV updates the
-existing rows instead of creating duplicates, and previously-fetched covers and
-ISBNs are preserved.
+The importer reads your column headings and works out both the mapping and what
+kind of thing the file describes — a file with `Player Count` or `Type of Game`
+is imported as board games, otherwise books. Override with `--kind=`.
+
+Recognised headings (any one of each row works):
+
+| Field | Accepted headings |
+|---|---|
+| title | Title, Name |
+| creator | Author, Creator, Designer, Publisher, Artist |
+| genre | Genre, Type of Game, Type, Category |
+| subject | Subject, Subjects, Topic, Topics |
+| age_range | Age Rating, Age Range, Ages, Age |
+| players | Player Count, Players, Number of Players |
+| play_time | Length of Game, Play Time, Playing Time, Duration, Length |
+| tags | Tags, Keywords |
+| location | Location, Where, Shelf |
+| summary | Summary, Description, Blurb |
+
+Safe to re-run. Matching is on title + creator *within the same kind*, so a
+corrected CSV updates rows instead of duplicating them — and a board game and a
+book of the same name can coexist. Columns your CSV doesn't have are left
+untouched rather than blanked, so re-importing never wipes covers or ISBNs.
 
 ## Filling in covers and ISBNs
 

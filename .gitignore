@@ -9,3 +9,6 @@ data/*.db-wal
 bertuccilibrary-*.json
 *-service-account*.json
 *service_account*.json
+
+# Cached cover images — rebuildable with: npm run covers
+data/covers/

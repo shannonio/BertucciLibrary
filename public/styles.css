@@ -149,6 +149,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   border-radius: 8px; overflow: hidden; background: var(--surface-2);
   box-shadow: var(--shadow); display: grid; place-items: center;
 }
+
+/* Board game boxes are square; book covers are tall. Forcing both into 2:3
+   letterboxes the games badly, so games get their own ratio. */
+.item.game .cover { aspect-ratio: 1 / 1; }
 /* `contain`, not `cover`: real book covers range from squat picture books to
    tall paperbacks, and cropping them to a uniform 2:3 slices off the title. */
 .cover img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--surface-2); }
@@ -165,6 +169,43 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   color: var(--ink); display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
 }
 .cover-fallback .cf-author { font-size: 10px; color: var(--ink-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Board games have no cover art available, so the card carries the details
+   that decide whether a game fits the afternoon. Hue is derived from genre so
+   the shelf groups visually by type of game. */
+.cover-fallback.game {
+  background:
+    linear-gradient(160deg,
+      hsl(var(--gh) 42% 88%) 0%,
+      hsl(calc(var(--gh) + 24) 38% 78%) 100%);
+  border-left: 4px solid hsl(var(--gh) 45% 42%);
+  justify-content: flex-start;
+  gap: 6px;
+  color: hsl(var(--gh) 55% 18%);
+}
+@media (prefers-color-scheme: dark) {
+  .cover-fallback.game {
+    background:
+      linear-gradient(160deg,
+        hsl(var(--gh) 32% 24%) 0%,
+        hsl(calc(var(--gh) + 24) 28% 16%) 100%);
+    border-left-color: hsl(var(--gh) 45% 55%);
+    color: hsl(var(--gh) 32% 90%);
+  }
+}
+.cover-fallback.game .cf-genre {
+  font-size: 8.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  opacity: .72; line-height: 1.2;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cover-fallback.game .cf-title {
+  font-family: var(--font); font-size: 13px; font-weight: 650; line-height: 1.22;
+  color: inherit; -webkit-line-clamp: 4;
+}
+.cover-fallback.game .cf-facts {
+  margin-top: auto; font-size: 9.5px; line-height: 1.45; opacity: .8;
+  font-variant-numeric: tabular-nums;
+}
 
 .kind-badge {
   position: absolute; top: 5px; right: 5px;

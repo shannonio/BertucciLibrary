@@ -63,14 +63,56 @@ function coverMarkup(item, { badge = true } = {}) {
       : '';
 
   if (item.cover_url) {
-    // On error, swap in the text fallback rather than leaving a broken image.
+    // A dead or hotlink-blocked URL must not leave an empty box. Carry enough
+    // of the item on the element to rebuild the right kind of card in place.
     return `<div class="cover">
       <img src="${esc(item.cover_url)}" alt="" loading="lazy" decoding="async"
-           onerror="this.closest('.cover').innerHTML=window.__fallbackCover(this.dataset.t,this.dataset.a)"
-           data-t="${esc(item.title)}" data-a="${esc(item.creator || '')}">
+           onerror="window.__coverFailed(this)"
+           data-kind="${esc(item.kind)}"
+           data-title="${esc(item.title)}"
+           data-creator="${esc(item.creator || '')}"
+           data-genre="${esc(item.genre || '')}"
+           data-players="${esc(item.players || '')}"
+           data-play="${esc(item.play_time || '')}"
+           data-age="${esc(item.age_range || '')}">
       ${badgeHtml}</div>`;
   }
+  if (item.kind === 'boardgame') {
+    // No badge here — the card already leads with the genre ("WORD GAME"), and
+    // the badge sits on top of it.
+    return `<div class="cover">${gameFallback(item)}</div>`;
+  }
   return `<div class="cover">${fallbackCover(item.title, item.creator)}${badgeHtml}</div>`;
+}
+
+/**
+ * Stable hue per genre, so all the dice games look related on the shelf and a
+ * given game keeps its colour between sessions.
+ */
+function hueFor(text) {
+  let h = 0;
+  for (const ch of String(text || 'x')) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+/**
+ * Board game box art is copyrighted, so no free database carries it — the
+ * cards below stand in. They lead with the things that actually decide whether
+ * a game fits an afternoon: who can play, how long, what age.
+ */
+function gameFallback(item) {
+  const hue = hueFor(item.genre || item.title);
+  const facts = [
+    item.players && `${esc(item.players)} players`,
+    item.play_time && esc(item.play_time),
+    item.age_range && `Ages ${esc(item.age_range)}`,
+  ].filter(Boolean);
+
+  return `<div class="cover-fallback game" style="--gh:${hue}">
+    <span class="cf-genre">${esc(item.genre || 'Game')}</span>
+    <span class="cf-title">${esc(item.title)}</span>
+    <span class="cf-facts">${facts.join('<br>')}</span>
+  </div>`;
 }
 
 function fallbackCover(title, author) {
@@ -79,10 +121,45 @@ function fallbackCover(title, author) {
     <span class="cf-author">${esc(author || '')}</span>
   </div>`;
 }
-window.__fallbackCover = fallbackCover;
+
+/** Replace a broken image with the card that item would have had anyway. */
+window.__coverFailed = (img) => {
+  const d = img.dataset;
+  const cover = img.closest('.cover');
+  if (!cover) return;
+  cover.innerHTML =
+    d.kind === 'boardgame'
+      ? gameFallback({
+          title: d.title, genre: d.genre, players: d.players,
+          play_time: d.play, age_range: d.age,
+        })
+      : fallbackCover(d.title, d.creator);
+};
+
+/**
+ * `onerror` covers a 404, but not a URL that simply never answers — a wrong
+ * scheme, a host that black-holes the request, a site that blocks hotlinking by
+ * hanging. Those would leave an empty box indefinitely, so give every image a
+ * deadline and fall back to the card when it passes.
+ *
+ * The deadline only applies to remote images. Locally cached covers are
+ * `loading="lazy"`, so one below the fold legitimately hasn't started loading
+ * yet — treating that as a failure replaced perfectly good covers with
+ * fallback cards while scrolling.
+ */
+function sweepStalledCovers(root = document, ms = 8000) {
+  setTimeout(() => {
+    for (const img of root.querySelectorAll('.cover img')) {
+      if (img.complete && img.naturalWidth > 0) continue;
+      const src = img.getAttribute('src') || '';
+      if (src.startsWith('/covers/')) continue; // served from disk; let it load
+      window.__coverFailed(img);
+    }
+  }, ms);
+}
 
 function itemCard(item) {
-  return `<button class="item" data-id="${item.id}">
+  return `<button class="item${item.kind === 'boardgame' ? ' game' : ''}" data-id="${item.id}">
     ${coverMarkup(item)}
     <div class="item-title">${esc(item.title)}</div>
     <div class="item-author">${esc(item.creator || '')}</div>
@@ -117,6 +194,7 @@ async function loadLibrary({ append = false } = {}) {
     state.offset = offset + data.items.length;
 
     $('#grid').insertAdjacentHTML('beforeend', data.items.map(itemCard).join(''));
+    sweepStalledCovers($('#grid'));
 
     $('#lib-count').textContent = state.total
       ? `${state.total.toLocaleString()} item${state.total === 1 ? '' : 's'}`
@@ -217,6 +295,7 @@ async function openDetail(id) {
       ${metaRow('Subjects', item.subject)}
       ${metaRow('Ages', item.age_range)}
       ${metaRow('Players', item.players)}
+      ${metaRow('Play time', item.play_time)}
       ${metaRow('Publisher', item.publisher)}
       ${metaRow('Published', item.published)}
       ${metaRow('Pages', item.page_count)}

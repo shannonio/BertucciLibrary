@@ -20,9 +20,12 @@ if (!isConfigured()) {
 console.log('\n  Writing the catalog into the Google Sheet...\n');
 
 try {
-  const { rows, tab } = await initSheet();
-  console.log(`  Done — ${rows} items written to the "${tab}" tab.`);
-  console.log(`  ${sheetUrl()}\n`);
+  const { rows, tabs } = await initSheet();
+  console.log(`  Done — ${rows} items written.`);
+  for (const t of tabs) {
+    console.log(`    ${String(t.rows).padStart(5)}  ${t.tab}`);
+  }
+  console.log(`\n  ${sheetUrl()}\n`);
   console.log('  The Sheet is now the source of truth. Edit it freely; the app');
   console.log('  pulls changes on open, and pushes its own changes immediately.\n');
 } catch (err) {

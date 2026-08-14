@@ -22,6 +22,7 @@ import {
   NOT_NULL_DEFAULTS,
   getSyncState,
 } from './db.js';
+import { cacheCover, localCoverFor } from './covers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(here, '..');
@@ -37,7 +38,7 @@ export const SHEET_COLUMNS = [
   'id',
   'title', 'creator', 'kind', 'genre', 'subject',
   'age_range', 'location', 'tags', 'notes',
-  'quantity', 'players', 'play_minutes',
+  'quantity', 'players', 'play_time',
   'isbn', 'isbn10', 'cover_url',
   'publisher', 'published', 'page_count', 'file_path',
   'summary',
@@ -53,7 +54,7 @@ export const SHEET_COLUMNS = [
 const READ_ONLY_ON_PULL = new Set(['id', 'created_at', 'updated_at']);
 
 // Stored as numbers so a spreadsheet doesn't render them as text.
-const NUMERIC = new Set(['page_count', 'play_minutes', 'quantity']);
+const NUMERIC = new Set(['page_count', 'quantity']);
 
 // ---------------------------------------------------------------- config
 
@@ -170,18 +171,67 @@ async function call(method, url, body) {
 const sheetId = () => process.env.GOOGLE_SHEET_ID;
 const quoteTab = (name) => `'${String(name).replace(/'/g, "''")}'`;
 
-/** The first tab's title and numeric gid — gid is required to delete rows. */
-let cachedTab = null;
-async function tab() {
-  if (cachedTab) return cachedTab;
+/**
+ * Which tab each kind of item lives in. Several kinds share the "Other
+ * Resources" tab — the `kind` column still distinguishes them there.
+ */
+const TAB_FOR_KIND = {
+  book: 'Books',
+  boardgame: 'Board Games',
+  curriculum: 'Other Resources',
+  material: 'Other Resources',
+  media: 'Other Resources',
+};
+
+/**
+ * All tabs in the spreadsheet, keyed by lower-cased title. Titles are matched
+ * loosely so renaming "Board Games" to "Games" keeps working, and anything
+ * unrecognised still syncs into the first tab rather than being dropped.
+ */
+let cachedTabs = null;
+async function loadTabs() {
+  if (cachedTabs) return cachedTabs;
   const meta = await call(
     'GET',
     `${API}/${sheetId()}?fields=sheets.properties(sheetId,title)`
   );
-  const props = meta.sheets?.[0]?.properties;
-  if (!props) throw new Error('That spreadsheet has no sheets.');
-  cachedTab = { title: props.title, gid: props.sheetId };
-  return cachedTab;
+  const list = (meta.sheets || []).map((s) => ({
+    title: s.properties.title,
+    gid: s.properties.sheetId,
+  }));
+  if (!list.length) throw new Error('That spreadsheet has no sheets.');
+  cachedTabs = list;
+  return list;
+}
+
+const normalise = (s) => String(s).toLowerCase().replace(/[^a-z]/g, '');
+
+async function tabForKind(kind) {
+  const list = await loadTabs();
+  const wanted = normalise(TAB_FOR_KIND[kind] || TAB_FOR_KIND.book);
+  return (
+    list.find((t) => normalise(t.title) === wanted) ||
+    // A renamed tab still matches if one name contains the other.
+    list.find((t) => normalise(t.title).includes(wanted) || wanted.includes(normalise(t.title))) ||
+    list[0]
+  );
+}
+
+/** Every tab we sync, with the kinds each one is expected to hold. */
+async function syncedTabs() {
+  const list = await loadTabs();
+  return list.map((t) => ({
+    ...t,
+    kinds: Object.entries(TAB_FOR_KIND)
+      .filter(([, title]) => normalise(title) === normalise(t.title))
+      .map(([kind]) => kind),
+  }));
+}
+
+/** Default kind for rows typed into a tab without filling in `kind`. */
+async function defaultKindFor(tabTitle) {
+  const t = (await syncedTabs()).find((x) => x.title === tabTitle);
+  return t?.kinds[0] || 'book';
 }
 
 const colLetter = (i) => {
@@ -242,9 +292,8 @@ function differs(stored, incoming) {
 
 // ---------------------------------------------------------------- read
 
-async function readGrid() {
-  const t = await tab();
-  const range = `${quoteTab(t.title)}!A1:${LAST_COL}`;
+async function readGrid(tabTitle) {
+  const range = `${quoteTab(tabTitle)}!A1:${LAST_COL}`;
   const data = await call(
     'GET',
     `${API}/${sheetId()}/values/${encodeURIComponent(range)}?majorDimension=ROWS`
@@ -268,10 +317,9 @@ function headerMap(headerRow) {
 
 // ---------------------------------------------------------------- push
 
-/** id -> 1-based sheet row number, rebuilt from column A. */
-async function rowIndex() {
-  const t = await tab();
-  const range = `${quoteTab(t.title)}!A1:A`;
+/** id -> 1-based row number, per tab, rebuilt from column A. */
+async function rowIndex(tabTitle) {
+  const range = `${quoteTab(tabTitle)}!A1:A`;
   const data = await call(
     'GET',
     `${API}/${sheetId()}/values/${encodeURIComponent(range)}?majorDimension=COLUMNS`
@@ -286,6 +334,36 @@ async function rowIndex() {
 }
 
 /**
+ * Make sure a tab has the header row before anything is appended to it.
+ * Without this, appending to an empty tab lands the first item in row 1, where
+ * it silently becomes the header and is then invisible to every later pull.
+ */
+async function ensureHeader(tabTitle) {
+  const range = `${quoteTab(tabTitle)}!A1:${LAST_COL}1`;
+  const data = await call(
+    'GET',
+    `${API}/${sheetId()}/values/${encodeURIComponent(range)}`
+  );
+  const first = data.values?.[0] || [];
+  if (String(first[0] || '').trim().toLowerCase() === 'id') return;
+
+  await call('POST', `${API}/${sheetId()}/values:batchUpdate`, {
+    valueInputOption: 'RAW',
+    data: [{ range, values: [SHEET_COLUMNS] }],
+  });
+}
+
+/** Where each id currently sits: id -> {tab, row}, across every tab. */
+async function locateAll() {
+  const located = new Map();
+  for (const t of await loadTabs()) {
+    const index = await rowIndex(t.title);
+    for (const [id, row] of index) located.set(id, { tab: t, row });
+  }
+  return located;
+}
+
+/**
  * Drain the outbox to the Sheet. Batches aggressively — the write quota is
  * 60/min, and an enrichment run can queue ~900 changes at once.
  * Returns a summary; never throws for "not configured".
@@ -296,32 +374,43 @@ export async function flushOutbox({ limit = 5000 } = {}) {
   const queued = readOutbox(limit);
   if (!queued.length) return { updated: 0, appended: 0, deleted: 0, remaining: 0 };
 
-  const t = await tab();
-  const index = await rowIndex();
+  const located = await locateAll();
 
-  const updates = [];   // existing rows -> values.batchUpdate
-  const appends = [];   // new rows      -> values.append
-  const deleteRows = []; // sheet row numbers -> spreadsheets.batchUpdate
+  const updates = [];                 // in-place row rewrites
+  const appendsByTab = new Map();     // tab title -> rows to append
+  const deletesByGid = new Map();     // gid -> row numbers to remove
   const handled = [];
 
+  const queueDelete = (gid, row) => {
+    if (!deletesByGid.has(gid)) deletesByGid.set(gid, []);
+    deletesByGid.get(gid).push(row);
+  };
+
   for (const { item_id: id, op } of queued) {
+    const at = located.get(id);
+
     if (op === 'delete') {
-      const row = index.get(id);
-      if (row) deleteRows.push(row);
+      if (at) queueDelete(at.tab.gid, at.row);
       handled.push(id);
       continue;
     }
-    const item = getItem(id);
-    if (!item) { handled.push(id); continue; } // deleted before we got to it
 
-    const row = index.get(id);
-    if (row) {
+    const item = getItem(id);
+    if (!item) { handled.push(id); continue; } // removed before we got to it
+
+    const target = await tabForKind(item.kind);
+
+    if (at && at.tab.gid === target.gid) {
       updates.push({
-        range: `${quoteTab(t.title)}!A${row}:${LAST_COL}${row}`,
+        range: `${quoteTab(at.tab.title)}!A${at.row}:${LAST_COL}${at.row}`,
         values: [rowFor(item)],
       });
     } else {
-      appends.push(rowFor(item));
+      // Either brand new, or its `kind` changed and it now belongs in a
+      // different tab — remove the stale row before appending the new one.
+      if (at) queueDelete(at.tab.gid, at.row);
+      if (!appendsByTab.has(target.title)) appendsByTab.set(target.title, []);
+      appendsByTab.get(target.title).push(rowFor(item));
     }
     handled.push(id);
   }
@@ -333,33 +422,39 @@ export async function flushOutbox({ limit = 5000 } = {}) {
     });
   }
 
-  if (appends.length) {
-    const range = `${quoteTab(t.title)}!A1`;
+  for (const [title, values] of appendsByTab) {
+    await ensureHeader(title);
+    const range = `${quoteTab(title)}!A1`;
     await call(
       'POST',
       `${API}/${sheetId()}/values/${encodeURIComponent(range)}:append` +
         `?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-      { values: appends }
+      { values }
     );
   }
 
-  if (deleteRows.length) {
-    // Descending, or earlier deletions shift the rows beneath them.
-    const requests = [...new Set(deleteRows)]
-      .sort((a, b) => b - a)
-      .map((row) => ({
-        deleteDimension: {
-          range: { sheetId: t.gid, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
-        },
-      }));
+  let deleted = 0;
+  if (deletesByGid.size) {
+    const requests = [];
+    for (const [gid, rows] of deletesByGid) {
+      // Descending, or an earlier deletion shifts the rows beneath it.
+      for (const row of [...new Set(rows)].sort((a, b) => b - a)) {
+        requests.push({
+          deleteDimension: {
+            range: { sheetId: gid, dimension: 'ROWS', startIndex: row - 1, endIndex: row },
+          },
+        });
+        deleted++;
+      }
+    }
     await call('POST', `${API}/${sheetId()}:batchUpdate`, { requests });
   }
 
   clearOutbox(handled);
   return {
     updated: updates.length,
-    appended: appends.length,
-    deleted: deleteRows.length,
+    appended: [...appendsByTab.values()].reduce((n, v) => n + v.length, 0),
+    deleted,
     remaining: outboxSize(),
   };
 }
@@ -378,83 +473,96 @@ export async function flushOutbox({ limit = 5000 } = {}) {
 export async function pull({ force = false } = {}) {
   if (!isConfigured()) return { skipped: true, reason: configProblem() };
 
-  const grid = await readGrid();
-  if (!grid.length) {
-    return { skipped: true, reason: 'The Sheet is empty — run `npm run sheet:init` first.' };
-  }
-
-  const cols = headerMap(grid[0]);
-  if (!cols.has('id') || !cols.has('title')) {
-    throw new Error(
-      'The Sheet needs at least "id" and "title" columns in the header row. ' +
-        'Run `npm run sheet:init` to lay it out correctly.'
-    );
-  }
-
+  const tabs = await syncedTabs();
   const seen = new Set();
-  const toInsertBlank = [];
+  const writeBacks = [];
   let updated = 0;
   let inserted = 0;
+  let readRows = 0;
+  let tabsRead = 0;
 
-  const apply = db.transaction(() => {
-    for (let r = 1; r < grid.length; r++) {
-      const row = grid[r];
-      if (!row || row.every((c) => String(c ?? '').trim() === '')) continue;
+  for (const t of tabs) {
+    const grid = await readGrid(t.title);
+    if (grid.length < 2) continue; // empty or header-only tab
 
-      const title = fromCell('title', row[cols.get('title')]);
-      if (!title) continue; // a stray note in some cell, not an item
-
-      const fields = {};
-      for (const [field, i] of cols) {
-        if (READ_ONLY_ON_PULL.has(field)) continue;
-        fields[field] = fromCell(field, row[i]);
-      }
-
-      const rawId = String(row[cols.get('id')] ?? '').trim();
-      const id = Number(rawId);
-
-      if (!rawId || !Number.isInteger(id) || id <= 0) {
-        toInsertBlank.push({ sheetRow: r + 1, fields });
-        continue;
-      }
-
-      seen.add(id);
-      const before = getItem(id);
-      if (before) {
-        // Only write when something actually differs. Without this every pull
-        // rewrites all ~1000 rows, reindexes the whole FTS table, bumps every
-        // updated_at, and reports "968 changes" on an app open where nothing
-        // changed at all.
-        if (differs(before, fields)) {
-          upsertItemWithId(id, fields);
-          updated++;
-        }
-      } else {
-        upsertItemWithId(id, fields);
-        inserted++;
-      }
+    const cols = headerMap(grid[0]);
+    if (!cols.has('id') || !cols.has('title')) {
+      // A tab that isn't laid out as a catalog (scratch notes, a chart) is
+      // skipped rather than treated as 900 deletions.
+      continue;
     }
-  });
 
-  // Suppress the outbox: these rows came from the Sheet, so pushing them
-  // straight back would be a pointless round trip.
-  withOutboxSuppressed(apply);
+    tabsRead++;
+    readRows += grid.length - 1;
+    const fallbackKind = await defaultKindFor(t.title);
+    const toInsertBlank = [];
 
-  // Rows typed by hand without an id: insert, then write the *whole* stored row
-  // back. Writing only the id would leave blank cells for the NOT NULL columns,
-  // so the very next pull would try to set them to null.
-  const writeBacks = [];
-  if (toInsertBlank.length) {
-    withOutboxSuppressed(() => {
-      for (const { sheetRow, fields } of toInsertBlank) {
-        const nextId =
-          (db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM items').get().m || 0) + 1;
-        const saved = upsertItemWithId(nextId, { ...fields, source: fields.source || 'sheet' });
-        seen.add(nextId);
-        inserted++;
-        writeBacks.push({ sheetRow, values: rowFor(saved) });
+    const apply = db.transaction(() => {
+      for (let r = 1; r < grid.length; r++) {
+        const row = grid[r];
+        if (!row || row.every((c) => String(c ?? '').trim() === '')) continue;
+
+        const title = fromCell('title', row[cols.get('title')]);
+        if (!title) continue; // a stray note in a cell, not an item
+
+        const fields = {};
+        for (const [field, i] of cols) {
+          if (READ_ONLY_ON_PULL.has(field)) continue;
+          fields[field] = fromCell(field, row[i]);
+        }
+        // A row typed into the Board Games tab is a board game even if the
+        // `kind` cell was left blank.
+        if (!fields.kind) fields.kind = fallbackKind;
+
+        const rawId = String(row[cols.get('id')] ?? '').trim();
+        const id = Number(rawId);
+
+        if (!rawId || !Number.isInteger(id) || id <= 0) {
+          toInsertBlank.push({ sheetRow: r + 1, fields });
+          continue;
+        }
+
+        seen.add(id);
+        const before = getItem(id);
+        if (before) {
+          // Only write when something actually differs. Without this every pull
+          // rewrites every row, reindexes the whole FTS table, bumps every
+          // updated_at, and reports "968 changes" on an app open where nothing
+          // changed at all.
+          if (differs(before, fields)) {
+            upsertItemWithId(id, fields);
+            updated++;
+          }
+        } else {
+          upsertItemWithId(id, fields);
+          inserted++;
+        }
       }
     });
+
+    // Suppress the outbox: these rows came from the Sheet, so queueing them to
+    // be pushed straight back would be a pointless round trip.
+    withOutboxSuppressed(apply);
+
+    // Rows typed by hand without an id: insert, then write the *whole* stored
+    // row back. Writing only the id would leave blank cells for the NOT NULL
+    // columns, so the very next pull would try to set them to null.
+    if (toInsertBlank.length) {
+      withOutboxSuppressed(() => {
+        for (const { sheetRow, fields } of toInsertBlank) {
+          const nextId =
+            (db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM items').get().m || 0) + 1;
+          const saved = upsertItemWithId(nextId, { ...fields, source: fields.source || 'sheet' });
+          seen.add(nextId);
+          inserted++;
+          writeBacks.push({ tabTitle: t.title, sheetRow, values: rowFor(saved) });
+        }
+      });
+    }
+  }
+
+  if (!tabsRead) {
+    return { skipped: true, reason: 'No catalog tabs found — run `npm run sheet:init` first.' };
   }
 
   // Deletions, behind the guard.
@@ -476,11 +584,10 @@ export async function pull({ force = false } = {}) {
   }
 
   if (writeBacks.length) {
-    const t = await tab();
     await call('POST', `${API}/${sheetId()}/values:batchUpdate`, {
       valueInputOption: 'RAW',
-      data: writeBacks.map(({ sheetRow, values }) => ({
-        range: `${quoteTab(t.title)}!A${sheetRow}:${LAST_COL}${sheetRow}`,
+      data: writeBacks.map(({ tabTitle, sheetRow, values }) => ({
+        range: `${quoteTab(tabTitle)}!A${sheetRow}:${LAST_COL}${sheetRow}`,
         values: [values],
       })),
     });
@@ -488,45 +595,88 @@ export async function pull({ force = false } = {}) {
 
   setSyncState('last_pull_at', new Date().toISOString());
 
+  // Pull in any cover art that arrived with this sync — pasting a URL into the
+  // Sheet should be all it takes. Deliberately not awaited: a slow image host
+  // must not hold up the sync the user is waiting on.
+  cacheNewCovers().catch(() => {});
+
   return {
     updated, inserted, deleted, refusedDeletes, threshold,
-    rows: grid.length - 1,
+    rows: readRows, tabs: tabsRead,
   };
+}
+
+/** Fetch any cover URL we don't hold locally yet. */
+async function cacheNewCovers() {
+  const rows = db
+    .prepare(
+      `SELECT cover_url FROM items
+       WHERE cover_url IS NOT NULL AND cover_url <> ''
+         AND cover_url NOT LIKE '/covers/%'`
+    )
+    .all();
+
+  for (const { cover_url: url } of rows) {
+    if (localCoverFor(url)) continue;
+    await cacheCover(url);
+    await new Promise((r) => setTimeout(r, 60));
+  }
 }
 
 // ---------------------------------------------------------------- bootstrap
 
-/** Lay out the header row, freeze it, and write every item. One-time setup. */
+/**
+ * Lay out the header row in every catalog tab, freeze it, and write each item
+ * into the tab that matches its kind. One-time setup, and safe to re-run: it
+ * rewrites the tabs from the local catalog.
+ */
 export async function initSheet() {
   if (!isConfigured()) throw new Error(configProblem());
 
-  const t = await tab();
+  const tabs = await syncedTabs();
   const items = allItems();
+  const written = [];
 
+  // Freeze every header row in a single structural call.
   await call('POST', `${API}/${sheetId()}:batchUpdate`, {
-    requests: [
-      {
-        updateSheetProperties: {
-          properties: { sheetId: t.gid, gridProperties: { frozenRowCount: 1 } },
-          fields: 'gridProperties.frozenRowCount',
-        },
+    requests: tabs.map((t) => ({
+      updateSheetProperties: {
+        properties: { sheetId: t.gid, gridProperties: { frozenRowCount: 1 } },
+        fields: 'gridProperties.frozenRowCount',
       },
-    ],
+    })),
   });
 
-  const values = [SHEET_COLUMNS, ...items.map(rowFor)];
-  const range = `${quoteTab(t.title)}!A1:${LAST_COL}${values.length}`;
-  await call(
-    'POST',
-    `${API}/${sheetId()}/values:batchUpdate`,
-    { valueInputOption: 'RAW', data: [{ range, values }] }
-  );
+  for (const t of tabs) {
+    const mine = [];
+    for (const item of items) {
+      const target = await tabForKind(item.kind);
+      if (target.gid === t.gid) mine.push(item);
+    }
+
+    const values = [SHEET_COLUMNS, ...mine.map(rowFor)];
+    // Clear first, so a tab that shrank doesn't keep stale rows below the new
+    // data (values.update only overwrites the range it's given).
+    await call(
+      'POST',
+      `${API}/${sheetId()}/values/${encodeURIComponent(`${quoteTab(t.title)}!A1:${LAST_COL}`)}:clear`,
+      {}
+    );
+    await call('POST', `${API}/${sheetId()}/values:batchUpdate`, {
+      valueInputOption: 'RAW',
+      data: [{
+        range: `${quoteTab(t.title)}!A1:${LAST_COL}${values.length}`,
+        values,
+      }],
+    });
+    written.push({ tab: t.title, rows: mine.length });
+  }
 
   // Everything is now mirrored, so anything queued beforehand is redundant.
   clearOutbox(readOutbox().map((r) => r.item_id));
   setSyncState('last_pull_at', new Date().toISOString());
 
-  return { rows: items.length, tab: t.title };
+  return { rows: items.length, tabs: written };
 }
 
 export function lastPullAt() {

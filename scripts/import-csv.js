@@ -63,28 +63,61 @@ async function main() {
 
   const rows = parseCSV(fs.readFileSync(CSV_PATH, 'utf8'));
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const idx = (name) => header.indexOf(name);
 
-  const iTitle = idx('title');
-  const iAuthor = idx('author');
-  const iGenre = idx('genre');
-  const iSubject = idx('subject');
-  const iSummary = idx('summary');
+  // Map CSV headings onto catalog fields. Several spellings per field so a
+  // books export and a games export both import without editing anything.
+  const FIELD_ALIASES = {
+    title: ['title', 'name'],
+    creator: ['author', 'creator', 'designer', 'publisher', 'artist'],
+    genre: ['genre', 'type of game', 'type', 'category'],
+    subject: ['subject', 'subjects', 'topic', 'topics'],
+    summary: ['summary', 'description', 'blurb'],
+    age_range: ['age rating', 'age range', 'ages', 'age'],
+    players: ['player count', 'players', 'number of players'],
+    play_time: ['length of game', 'play time', 'playing time', 'duration', 'length'],
+    tags: ['tags', 'keywords'],
+    location: ['location', 'where', 'shelf'],
+    notes: ['notes', 'note'],
+    isbn: ['isbn', 'isbn13', 'isbn-13'],
+  };
 
-  if (iTitle === -1) {
+  const colFor = {};
+  for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
+    const i = header.findIndex((h) => aliases.includes(h));
+    if (i !== -1) colFor[field] = i;
+  }
+
+  if (colFor.title === undefined) {
     console.error(`CSV needs a "Title" column. Found: ${header.join(', ')}`);
     process.exit(1);
   }
 
+  // Infer what these rows are from the columns present, unless told otherwise.
+  const kindArg = process.argv.find((a) => a.startsWith('--kind='));
+  const kind =
+    kindArg?.split('=')[1] ||
+    (colFor.players !== undefined || header.includes('type of game')
+      ? 'boardgame'
+      : 'book');
+
+  const cell = (row, field) => {
+    const i = colFor[field];
+    if (i === undefined) return null;
+    const v = (row[i] || '').trim();
+    return v === '' ? null : v;
+  };
+
+  // Match on title within the same kind, so a board game called "Dixit" and a
+  // book of the same name can coexist.
   const findExisting = db.prepare(
     `SELECT id FROM items
-     WHERE title = ? AND COALESCE(creator, '') = COALESCE(?, '')`
+     WHERE title = ? AND kind = ? AND COALESCE(creator, '') = COALESCE(?, '')`
   );
-  const updateExisting = db.prepare(
-    `UPDATE items SET genre = ?, subject = ?, summary = ?,
-       updated_at = datetime('now')
-     WHERE id = ?`
-  );
+
+  const FILLABLE = [
+    'creator', 'genre', 'subject', 'summary',
+    'age_range', 'players', 'play_time', 'tags', 'location', 'notes', 'isbn',
+  ];
 
   let inserted = 0;
   let updated = 0;
@@ -95,30 +128,38 @@ async function main() {
       const row = rows[r];
       if (!row || row.length < 2) continue;
 
-      const title = (row[iTitle] || '').trim();
+      const title = cell(row, 'title');
       if (!title) {
         skipped++;
         continue;
       }
-      const creator = (row[iAuthor] || '').trim() || null;
-      const genre = (row[iGenre] || '').trim() || null;
-      const subject = (row[iSubject] || '').trim() || null;
-      const summary = (row[iSummary] || '').trim() || null;
 
-      const existing = findExisting.get(title, creator);
+      const fields = {};
+      for (const f of FILLABLE) {
+        const v = cell(row, f);
+        if (v !== null) fields[f] = v;
+      }
+
+      const existing = findExisting.get(title, kind, fields.creator ?? null);
       if (existing) {
-        updateExisting.run(genre, subject, summary, existing.id);
+        // Re-importing a corrected CSV should update, not duplicate — but
+        // never blank out something the CSV simply doesn't carry.
+        const present = Object.keys(fields);
+        if (present.length) {
+          const set = present.map((f) => `${f} = @${f}`).join(', ');
+          db.prepare(
+            `UPDATE items SET ${set}, updated_at = datetime('now') WHERE id = @id`
+          ).run({ ...fields, id: existing.id });
+        }
         updated++;
       } else {
         insertItem({
-          kind: 'book',
+          kind,
           title,
-          creator,
-          genre,
-          subject,
-          summary,
+          ...fields,
           source: 'csv',
-          enrich_state: 'pending',
+          // Only books get ISBN/cover lookups; games have nothing to enrich.
+          enrich_state: kind === 'book' ? 'pending' : 'ok',
         });
         inserted++;
       }
@@ -126,6 +167,8 @@ async function main() {
   });
 
   run();
+  console.log(`  detected kind: ${kind}`);
+  console.log(`  mapped columns: ${Object.keys(colFor).join(', ')}`);
 
   const total = db.prepare('SELECT COUNT(*) AS n FROM items').get().n;
   console.log(`Imported ${path.basename(CSV_PATH)}`);

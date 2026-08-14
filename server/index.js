@@ -13,6 +13,7 @@ import {
 import { lookupByIsbn, normalizeIsbn, coverFromIsbn } from './lookup.js';
 import { ask, scanShelfImage, isConfigured, describeError, MODEL } from './claude.js';
 import * as sheets from './sheets.js';
+import { COVER_DIR, localCoverFor, cacheCover, cacheStats } from './covers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -55,6 +56,22 @@ app.use(
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
   })
 );
+
+// Cached cover art. Filenames are content-addressed, so a given URL always maps
+// to the same file and it can be cached hard — this is what makes the grid feel
+// instant on a phone.
+app.use(
+  '/covers',
+  express.static(COVER_DIR, {
+    immutable: true,
+    maxAge: '30d',
+  })
+);
+
+// A cached file that's been deleted should 404 so the <img> onerror fires and
+// the item falls back to its typeset card. Without this the static handler
+// falls through to the JSON API's error path and returns a 500.
+app.use('/covers', (req, res) => res.status(404).end());
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -120,16 +137,38 @@ app.get('/api/kinds', (req, res) => res.json({ kinds: ITEM_KINDS }));
 
 // ---------------------------------------------------------------- Items
 
+/**
+ * Serve the locally cached copy of a cover when we hold one, while leaving the
+ * stored value alone — the catalog and the Sheet keep the original URL as the
+ * record of where the art came from. `cover_source` exposes that original for
+ * anything that wants it.
+ */
+function withLocalCover(item) {
+  if (!item?.cover_url) return item;
+  const local = localCoverFor(item.cover_url);
+  if (!local || local === item.cover_url) return item;
+  return { ...item, cover_url: local, cover_source: item.cover_url };
+}
+
+/**
+ * Pull a cover into the local cache in the background. Fire-and-forget: a slow
+ * or dead image host must never delay the response the user is waiting on.
+ */
+function cacheCoverSoon(item) {
+  if (!item?.cover_url || localCoverFor(item.cover_url)) return;
+  cacheCover(item.cover_url).catch(() => {});
+}
+
 app.get('/api/items', (req, res) => {
   const { q, kind, genre, subject, limit, offset } = req.query;
   const { rows, total } = searchItems({ q, kind, genre, subject, limit, offset });
-  res.json({ items: rows, total, offset: Number(offset) || 0 });
+  res.json({ items: rows.map(withLocalCover), total, offset: Number(offset) || 0 });
 });
 
 app.get('/api/items/:id', (req, res) => {
   const item = getItem(Number(req.params.id));
   if (!item) return res.status(404).json({ error: 'Not found' });
-  res.json(item);
+  res.json(withLocalCover(item));
 });
 
 app.post('/api/items', (req, res) => {
@@ -141,16 +180,18 @@ app.post('/api/items', (req, res) => {
     return res.status(400).json({ error: `kind must be one of: ${ITEM_KINDS.join(', ')}` });
   }
   const item = insertItem({ ...body, source: body.source || 'manual' });
+  cacheCoverSoon(item);
   scheduleFlush();
-  res.status(201).json(item);
+  res.status(201).json(withLocalCover(item));
 });
 
 app.patch('/api/items/:id', (req, res) => {
   const id = Number(req.params.id);
   if (!getItem(id)) return res.status(404).json({ error: 'Not found' });
   const item = updateItem(id, req.body || {});
+  cacheCoverSoon(item);
   scheduleFlush();
-  res.json(item);
+  res.json(withLocalCover(item));
 });
 
 app.delete('/api/items/:id', (req, res) => {

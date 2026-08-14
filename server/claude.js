@@ -92,6 +92,9 @@ function compactItem(it) {
   if (it.subject) out.subject = it.subject;
   if (it.isbn) out.isbn = it.isbn;
   if (it.age_range) out.age_range = it.age_range;
+  if (it.players) out.players = it.players;
+  if (it.play_time) out.play_time = it.play_time;
+  if (it.tags) out.tags = it.tags;
   if (it.location) out.location = it.location;
   // Summaries dominate the token budget; a lead fragment is enough for Claude
   // to judge relevance, and it can always search again for more.

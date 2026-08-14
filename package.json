@@ -11,7 +11,9 @@
     "enrich": "node scripts/enrich.js",
     "setup": "npm run import && npm run enrich",
     "sheet:init": "node scripts/sheet-init.js",
-    "sheet:pull": "node scripts/sheet-pull.js"
+    "sheet:pull": "node scripts/sheet-pull.js",
+    "game:links": "node scripts/game-cover-links.js",
+    "covers": "node scripts/cache-covers.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
