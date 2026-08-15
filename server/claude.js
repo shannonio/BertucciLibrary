@@ -96,6 +96,10 @@ function compactItem(it) {
   if (it.play_time) out.play_time = it.play_time;
   if (it.tags) out.tags = it.tags;
   if (it.location) out.location = it.location;
+  // Digital curriculum: where the file sits and how to open it, so lesson plans
+  // can point at actual files rather than just naming them.
+  if (it.file_path) out.file_path = it.file_path;
+  if (it.web_url) out.link = it.web_url;
   // Summaries dominate the token budget; a lead fragment is enough for Claude
   // to judge relevance, and it can always search again for more.
   if (it.summary) out.summary = it.summary.slice(0, 320);
@@ -153,6 +157,8 @@ Search more than once when a topic has several natural phrasings — "weather" a
 When you recommend items, name the exact title and author as they appear in the catalog so they can be found on the shelf. Mention an item's ID only if asked.
 
 Lesson planning is the main use for this catalog. When asked to build a lesson or unit, work with what they actually have: group the real items you found into a sensible sequence, note the age range each suits, and say directly if there's a gap the collection doesn't cover.
+
+The collection includes digital files from their Drive as well as physical books and games. Those carry the folder they live in and a link to open them — mention the folder when it helps them find the file, and treat printable worksheets and lesson plans as usable material alongside the books.
 
 Keep responses tight and readable on a phone. Prose and short lists, not tables. Lead with the answer, then the supporting detail.`;
 

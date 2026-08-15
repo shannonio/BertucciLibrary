@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url';
 import { JWT } from 'google-auth-library';
 
 import {
-  db, getItem, deleteItem, upsertItemWithId, allItems, allItemIds,
+  db, getItem, deleteItem, upsertItemWithId, allItems, sheetSyncedItemIds,
   readOutbox, clearOutbox, outboxSize, withOutboxSuppressed, setSyncState,
   NOT_NULL_DEFAULTS,
   getSyncState,
@@ -40,7 +40,7 @@ export const SHEET_COLUMNS = [
   'age_range', 'location', 'tags', 'notes',
   'quantity', 'players', 'play_time',
   'isbn', 'isbn10', 'cover_url',
-  'publisher', 'published', 'page_count', 'file_path',
+  'publisher', 'published', 'page_count', 'file_path', 'web_url', 'external_id',
   'summary',
   'source', 'enrich_state', 'created_at', 'updated_at',
 ];
@@ -334,9 +334,15 @@ async function rowIndex(tabTitle) {
 }
 
 /**
- * Make sure a tab has the header row before anything is appended to it.
- * Without this, appending to an empty tab lands the first item in row 1, where
- * it silently becomes the header and is then invisible to every later pull.
+ * Make sure a tab's header row matches SHEET_COLUMNS exactly before writing.
+ *
+ * Two failures this prevents. Appending to an *empty* tab lands the first item
+ * in row 1, where it silently becomes the header and is invisible to every
+ * later pull. And if a column is ever added to SHEET_COLUMNS, a tab still
+ * carrying the old header would receive positionally-written rows that no
+ * longer line up — putting `web_url` under `summary` and shifting everything
+ * after it. Both are silent data corruption, so verify the whole row, not
+ * just that A1 says "id".
  */
 async function ensureHeader(tabTitle) {
   const range = `${quoteTab(tabTitle)}!A1:${LAST_COL}1`;
@@ -344,8 +350,12 @@ async function ensureHeader(tabTitle) {
     'GET',
     `${API}/${sheetId()}/values/${encodeURIComponent(range)}`
   );
-  const first = data.values?.[0] || [];
-  if (String(first[0] || '').trim().toLowerCase() === 'id') return;
+  const current = data.values?.[0] || [];
+
+  const matches =
+    current.length === SHEET_COLUMNS.length &&
+    SHEET_COLUMNS.every((c, i) => String(current[i] || '').trim() === c);
+  if (matches) return;
 
   await call('POST', `${API}/${sheetId()}/values:batchUpdate`, {
     valueInputOption: 'RAW',
@@ -373,6 +383,10 @@ export async function flushOutbox({ limit = 5000 } = {}) {
 
   const queued = readOutbox(limit);
   if (!queued.length) return { updated: 0, appended: 0, deleted: 0, remaining: 0 };
+
+  // Verify headers before writing anything positionally — a stale header would
+  // silently shift every value into the wrong column.
+  for (const t of await syncedTabs()) await ensureHeader(t.title);
 
   const located = await locateAll();
 
@@ -566,7 +580,7 @@ export async function pull({ force = false } = {}) {
   }
 
   // Deletions, behind the guard.
-  const dbIds = allItemIds();
+  const dbIds = sheetSyncedItemIds();
   const missing = dbIds.filter((id) => !seen.has(id));
   const threshold = Math.max(25, Math.floor(dbIds.length * 0.1));
   let deleted = 0;
@@ -634,7 +648,8 @@ export async function initSheet() {
   if (!isConfigured()) throw new Error(configProblem());
 
   const tabs = await syncedTabs();
-  const items = allItems();
+  // Drive-indexed files never go in the Sheet — see sheetSyncedItemIds().
+  const items = allItems().filter((i) => i.source !== 'drive');
   const written = [];
 
   // Freeze every header row in a single structural call.

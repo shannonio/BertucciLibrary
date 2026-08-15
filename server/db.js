@@ -146,6 +146,17 @@ END;
     `);
     db.exec('ALTER TABLE items DROP COLUMN play_minutes');
   }
+
+  // Digital resources need somewhere to record where they live and how to open
+  // them. `external_id` is deliberately generic — it holds a Drive file id now,
+  // and can hold a BGG id or similar later.
+  if (!cols().includes('web_url')) {
+    db.exec('ALTER TABLE items ADD COLUMN web_url TEXT');
+  }
+  if (!cols().includes('external_id')) {
+    db.exec('ALTER TABLE items ADD COLUMN external_id TEXT');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_items_external ON items(external_id)');
+  }
 }
 
 export const ITEM_KINDS = [
@@ -180,7 +191,8 @@ const COLUMNS = [
   'id', 'kind', 'title', 'creator', 'genre', 'subject', 'summary', 'isbn',
   'isbn10', 'cover_url', 'publisher', 'published', 'page_count', 'age_range',
   'players', 'play_time', 'location', 'notes', 'tags', 'quantity',
-  'file_path', 'source', 'enrich_state', 'created_at', 'updated_at',
+  'file_path', 'web_url', 'external_id', 'source', 'enrich_state',
+  'created_at', 'updated_at',
 ];
 
 // Qualified with the `i` alias because the FTS join puts identically-named
@@ -267,7 +279,7 @@ const INSERT_FIELDS = [
   'kind', 'title', 'creator', 'genre', 'subject', 'summary', 'isbn', 'isbn10',
   'cover_url', 'publisher', 'published', 'page_count', 'age_range', 'players',
   'play_time', 'location', 'notes', 'tags', 'quantity', 'file_path',
-  'source', 'enrich_state',
+  'web_url', 'external_id', 'source', 'enrich_state',
 ];
 
 export function insertItem(item) {
@@ -408,6 +420,21 @@ export function allItems() {
   return db
     .prepare(`SELECT ${SELECT_COLS_PLAIN} FROM items ORDER BY id`)
     .all();
+}
+
+/**
+ * Ids that participate in Sheet sync.
+ *
+ * Drive-indexed files are deliberately excluded: they never appear in the
+ * Sheet, so a pull would otherwise see every one of them as "deleted from the
+ * Sheet" and either remove thousands of rows or permanently trip the delete
+ * guard. Drive is their source of truth; re-running the indexer rebuilds them.
+ */
+export function sheetSyncedItemIds() {
+  return db
+    .prepare("SELECT id FROM items WHERE source IS NULL OR source <> 'drive'")
+    .all()
+    .map((r) => r.id);
 }
 
 export function allItemIds() {

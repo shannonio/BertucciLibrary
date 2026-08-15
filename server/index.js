@@ -13,6 +13,7 @@ import {
 import { lookupByIsbn, normalizeIsbn, coverFromIsbn } from './lookup.js';
 import { ask, scanShelfImage, isConfigured, describeError, MODEL } from './claude.js';
 import * as sheets from './sheets.js';
+import * as imagesearch from './imagesearch.js';
 import { COVER_DIR, localCoverFor, cacheCover, cacheStats } from './covers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +115,10 @@ app.get('/api/health', (req, res) => {
       lastPullAt: sheets.lastPullAt(),
       pending: outboxSize(),
     },
+    imageSearch: {
+      configured: imagesearch.isConfigured(),
+      problem: imagesearch.configProblem(),
+    },
   });
 });
 
@@ -200,6 +205,58 @@ app.delete('/api/items/:id', (req, res) => {
   scheduleFlush();
   res.json({ deleted: true });
 });
+
+// ---------------------------------------------------------------- Image search
+
+app.get('/api/image-search', wrap(async (req, res) => {
+  // Called with ?id= so the server can build a query from the item, or ?q=
+  // once the user edits it.
+  let query = String(req.query.q || '').trim();
+  let kind = String(req.query.kind || 'book');
+
+  if (req.query.id) {
+    const item = getItem(Number(req.query.id));
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    kind = item.kind;
+    if (!query) query = imagesearch.suggestedQuery(item);
+  }
+  if (!query) return res.status(400).json({ error: 'Nothing to search for.' });
+
+  try {
+    const results = await imagesearch.searchImages(query, { kind });
+    res.json({ query, kind, searchable: imagesearch.canSearch(kind), results });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+}));
+
+/**
+ * Attach a chosen image to an item.
+ *
+ * The image is downloaded first and only saved if that succeeds — so a picture
+ * that can't be fetched is rejected while the picker is still open, rather than
+ * becoming a broken cover you discover later.
+ */
+app.post('/api/items/:id/cover', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!getItem(id)) return res.status(404).json({ error: 'Not found' });
+
+  const url = String(req.body?.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) {
+    return res.status(400).json({ error: 'That is not a valid image URL.' });
+  }
+
+  const cached = await cacheCover(url);
+  if (!cached.path) {
+    return res.status(422).json({
+      error: `Could not fetch that image (${cached.error}). Try a different one.`,
+    });
+  }
+
+  const item = updateItem(id, { cover_url: url });
+  scheduleFlush();
+  res.json(withLocalCover(item));
+}));
 
 // ---------------------------------------------------------------- ISBN lookup
 
@@ -345,14 +402,29 @@ function lanAddress() {
   return candidates[0]?.address || 'localhost';
 }
 
-app.listen(PORT, '0.0.0.0', async () => {
+// Bind address. Default is every interface, which is what you want when the
+// phone reaches the Mac directly over WiFi. Behind `tailscale serve`, set
+// HOST=127.0.0.1 so the app is reachable *only* through Tailscale and not from
+// the local network as well.
+const HOST = process.env.HOST || '0.0.0.0';
+
+app.listen(PORT, HOST, async () => {
   const s = stats();
   console.log(`\n  Bertucci Library`);
   console.log(`  ${s.total} items · ${s.withCovers} covers · ${s.withIsbn} ISBNs`);
   console.log(`  Claude: ${isConfigured() ? `ready (${MODEL})` : 'not configured — set ANTHROPIC_API_KEY in .env'}`);
   console.log(`  Sheet:  ${sheets.isConfigured() ? 'connected' : sheets.configProblem()}`);
-  console.log(`\n  On this Mac:  http://localhost:${PORT}`);
-  console.log(`  On your phone: http://${lanAddress()}:${PORT}\n`);
+
+  if (process.env.PUBLIC_URL) {
+    console.log(`\n  Serving at: ${process.env.PUBLIC_URL}`);
+    console.log(`  Listening on ${HOST}:${PORT}\n`);
+  } else if (HOST === '127.0.0.1' || HOST === 'localhost') {
+    console.log(`\n  On this machine: http://localhost:${PORT}`);
+    console.log(`  (bound to localhost only — put a proxy in front to share it)\n`);
+  } else {
+    console.log(`\n  On this Mac:  http://localhost:${PORT}`);
+    console.log(`  On your phone: http://${lanAddress()}:${PORT}\n`);
+  }
 
   // Drain anything queued while the server was down, then take the Sheet's
   // version of the world. Failures here are non-fatal — the app runs fine on

@@ -56,6 +56,33 @@ $$('.tab').forEach((t) => t.addEventListener('click', () => goto(t.dataset.goto)
 const state = { q: '', kind: '', offset: 0, total: 0 };
 const PAGE = 60;
 
+// Grid suits books and games, where the cover is the identifier. List suits the
+// thousands of Drive files, where the filename and folder are. Remembered
+// between sessions.
+let view = localStorage.getItem('view') === 'list' ? 'list' : 'grid';
+
+const VIEW_ICONS = {
+  // Showing a grid icon means "switch to grid", so the icon is the *other* mode.
+  grid: '<rect x="4" y="6" width="16" height="2.5" rx="1"/><rect x="4" y="11" width="16" height="2.5" rx="1"/><rect x="4" y="16" width="16" height="2.5" rx="1"/>',
+  list: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+};
+
+function applyView() {
+  $('#grid').classList.toggle('list', view === 'list');
+  // The icon advertises what you'd get by tapping, not the current state.
+  $('#view-icon').innerHTML = VIEW_ICONS[view];
+  $('#view-icon').setAttribute('fill', 'currentColor');
+  $('#view-icon').setAttribute('stroke', 'none');
+  $('#view-toggle').title = view === 'grid' ? 'Switch to list view' : 'Switch to grid view';
+}
+
+$('#view-toggle').addEventListener('click', () => {
+  view = view === 'grid' ? 'list' : 'grid';
+  localStorage.setItem('view', view);
+  applyView();
+  loadLibrary();
+});
+
 function coverMarkup(item, { badge = true } = {}) {
   const badgeHtml =
     badge && item.kind && item.kind !== 'book'
@@ -81,6 +108,11 @@ function coverMarkup(item, { badge = true } = {}) {
     // No badge here — the card already leads with the genre ("WORD GAME"), and
     // the badge sits on top of it.
     return `<div class="cover">${gameFallback(item)}</div>`;
+  }
+  if (item.kind === 'curriculum' && item.web_url) {
+    // Digital files have no cover at all. Show the file type and where it
+    // lives, which is what tells them apart on a shelf of PDFs.
+    return `<div class="cover">${docFallback(item)}</div>`;
   }
   return `<div class="cover">${fallbackCover(item.title, item.creator)}${badgeHtml}</div>`;
 }
@@ -112,6 +144,16 @@ function gameFallback(item) {
     <span class="cf-genre">${esc(item.genre || 'Game')}</span>
     <span class="cf-title">${esc(item.title)}</span>
     <span class="cf-facts">${facts.join('<br>')}</span>
+  </div>`;
+}
+
+/** Card for a digital file: what kind it is, and which folder it came from. */
+function docFallback(item) {
+  const folder = String(item.file_path || '').split('/').slice(0, -1).pop() || '';
+  return `<div class="cover-fallback doc">
+    <span class="cf-genre">${esc(item.genre || 'File')}</span>
+    <span class="cf-title">${esc(item.title.replace(/\.[a-z0-9]{2,5}$/i, ''))}</span>
+    <span class="cf-facts">${esc(folder)}</span>
   </div>`;
 }
 
@@ -158,12 +200,61 @@ function sweepStalledCovers(root = document, ms = 8000) {
   }, ms);
 }
 
+/**
+ * A direct "open the file" link, shown on anything with a URL — mostly Drive
+ * curriculum. Saves opening the detail sheet just to reach the file.
+ *
+ * It's a sibling of the clickable card rather than nested inside it: an <a>
+ * inside a <button> is invalid HTML and breaks keyboard navigation.
+ */
+function openLink(item, { label = false } = {}) {
+  if (!item.web_url) return '';
+  return `<a class="open-link" href="${esc(item.web_url)}" target="_blank" rel="noopener"
+             title="Open in Google Drive" aria-label="Open ${esc(item.title)} in Google Drive">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    ${label ? '<span>Open</span>' : ''}
+  </a>`;
+}
+
+/** Secondary line: whatever best identifies this kind of thing at a glance. */
+function itemSubtitle(item) {
+  if (item.kind === 'boardgame') {
+    return [item.players && `${item.players} players`, item.play_time, item.age_range && `ages ${item.age_range}`]
+      .filter(Boolean).join(' · ');
+  }
+  if (item.kind === 'curriculum') {
+    // The folder it lives in says far more than a (usually absent) author.
+    return String(item.file_path || '').split('/').slice(1, -1).join(' / ');
+  }
+  return item.creator || '';
+}
+
 function itemCard(item) {
-  return `<button class="item${item.kind === 'boardgame' ? ' game' : ''}" data-id="${item.id}">
-    ${coverMarkup(item)}
-    <div class="item-title">${esc(item.title)}</div>
-    <div class="item-author">${esc(item.creator || '')}</div>
-  </button>`;
+  const cls = ['item', item.kind === 'boardgame' ? 'game' : '', view === 'list' ? 'row' : '']
+    .filter(Boolean).join(' ');
+
+  if (view === 'list') {
+    return `<div class="${cls}">
+      <button class="item-hit" data-id="${item.id}">
+        ${coverMarkup(item, { badge: false })}
+        <span class="row-text">
+          <span class="item-title">${esc(item.title)}</span>
+          <span class="item-author">${esc(itemSubtitle(item))}</span>
+        </span>
+        ${item.kind !== 'book' ? `<span class="row-kind">${esc(KIND_SHORT[item.kind] || '')}</span>` : ''}
+      </button>
+      ${openLink(item)}
+    </div>`;
+  }
+
+  return `<div class="${cls}">
+    <button class="item-hit" data-id="${item.id}">
+      ${coverMarkup(item)}
+      <span class="item-title">${esc(item.title)}</span>
+      <span class="item-author">${esc(itemSubtitle(item))}</span>
+    </button>
+    ${openLink(item)}
+  </div>`;
 }
 
 /**
@@ -236,7 +327,9 @@ $('#search-clear').addEventListener('click', () => {
 $('#load-more').addEventListener('click', () => loadLibrary({ append: true }));
 
 $('#grid').addEventListener('click', (e) => {
-  const btn = e.target.closest('.item');
+  // Ignore clicks on the open-in-Drive link, which is a sibling of the hit area.
+  if (e.target.closest('.open-link')) return;
+  const btn = e.target.closest('.item-hit');
   if (btn) openDetail(Number(btn.dataset.id));
 });
 
@@ -300,6 +393,7 @@ async function openDetail(id) {
       ${metaRow('Published', item.published)}
       ${metaRow('Pages', item.page_count)}
       ${metaRow('Location', item.location)}
+      ${metaRow('In folder', item.file_path)}
       ${metaRow('Notes', item.notes)}
     </dl>
 
@@ -307,9 +401,22 @@ async function openDetail(id) {
 
     <div class="detail-actions">
       ${
+        item.web_url
+          ? `<a class="btn primary" target="_blank" rel="noopener"
+               href="${esc(item.web_url)}">Open file</a>`
+          : ''
+      }
+      ${
         item.isbn
           ? `<a class="btn ghost" target="_blank" rel="noopener"
                href="https://openlibrary.org/isbn/${esc(item.isbn)}">Open Library</a>`
+          : ''
+      }
+      ${
+        health.imageSearch?.configured
+          ? `<button class="btn ghost" data-find-cover="${item.id}">
+               ${item.cover_url ? 'Change cover' : 'Find a cover'}
+             </button>`
           : ''
       }
       <button class="btn ghost" data-ask-about="${esc(item.title)}">Ask about this</button>
@@ -348,12 +455,178 @@ $('#sheet-body').addEventListener('click', async (e) => {
     return;
   }
 
+  const findBtn = e.target.closest('[data-find-cover]');
+  if (findBtn) {
+    try {
+      const item = await api(`/api/items/${findBtn.dataset.findCover}`);
+      closeSheet();
+      openPicker(item);
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
+
   const askBtn = e.target.closest('[data-ask-about]');
   if (askBtn) {
     closeSheet();
     goto('ask');
     $('#ask-input').value = `Tell me about "${askBtn.dataset.askAbout}" and suggest a lesson I could build around it.`;
     autosize($('#ask-input'));
+  }
+});
+
+// =============================================================== Cover picker
+
+const picker = { itemId: null, kind: null, busy: false };
+
+function openPicker(item) {
+  if (!health.imageSearch?.configured) {
+    return toast(health.imageSearch?.problem || 'Image search is not set up.', 7000);
+  }
+  picker.itemId = item.id;
+  picker.kind = item.kind;
+  $('#picker-title').textContent = item.title;
+  // Fill the box before searching, so a failed search still leaves something
+  // to edit and retry rather than an empty field.
+  $('#picker-q').value =
+    item.kind === 'boardgame'
+      ? `${item.title} board game`
+      : [item.title, (item.creator || '').replace(/\s*\([^)]*\)/g, '').split(/[,;]/)[0].trim()]
+          .filter(Boolean)
+          .join(' ');
+  $('#picker-results').innerHTML =
+    '<p class="picker-msg">Searching…</p>';
+  $('#picker').hidden = false;
+  $('#picker-backdrop').hidden = false;
+  // Search straight away using a query built from the item, so the common case
+  // is one tap rather than typing.
+  runPickerSearch({ id: item.id });
+}
+
+function closePicker() {
+  $('#picker').hidden = true;
+  $('#picker-backdrop').hidden = true;
+  picker.itemId = null;
+}
+
+$('#picker-close').addEventListener('click', closePicker);
+$('#picker-backdrop').addEventListener('click', closePicker);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#picker').hidden) closePicker();
+});
+
+async function runPickerSearch({ id, q, kind } = {}) {
+  const results = $('#picker-results');
+  results.innerHTML = '<p class="picker-msg">Searching…</p>';
+  $('#picker-go').disabled = true;
+
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (id) params.set('id', id);
+    if (kind) params.set('kind', kind);
+
+    const data = await api(`/api/image-search?${params}`);
+    if (data.query) $('#picker-q').value = data.query;
+
+    if (!data.results.length) {
+      // Games have no automatic source — say so plainly and point at the two
+      // things that do work, rather than implying the search just failed.
+      if (data.searchable === false) {
+        const bgg = `https://boardgamegeek.com/geeksearch.php?action=search&objecttype=boardgame&q=${encodeURIComponent(
+          $('#picker-title').textContent
+        )}`;
+        results.innerHTML = `<p class="picker-msg">
+          No free catalog carries board game box art.<br>
+          <a href="${bgg}" target="_blank" rel="noopener">Find it on BoardGameGeek</a>,
+          right-click the box image, copy the address, and paste it above.
+        </p>`;
+        $('#paste-block').open = true;
+      } else {
+        results.innerHTML =
+          '<p class="picker-msg">No images found. Try different words.</p>';
+      }
+      return;
+    }
+
+    results.innerHTML = data.results
+      .map(
+        // Not lazy: there are only ten, they're all on screen at once, and
+        // deferring them leaves the picker showing empty boxes.
+        (r, i) => `<button class="pick" data-i="${i}" title="${esc(r.source || '')}">
+          <img src="${esc(r.thumbnail)}" alt="" decoding="async">
+        </button>`
+      )
+      .join('');
+    picker.results = data.results;
+  } catch (err) {
+    results.innerHTML = `<p class="picker-msg err">${esc(err.message)}</p>`;
+  } finally {
+    $('#picker-go').disabled = false;
+  }
+}
+
+$('#picker-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const q = $('#picker-q').value.trim();
+  if (q) runPickerSearch({ q, kind: picker.kind });
+});
+
+/** Attach a URL — shared by tapping a result and by pasting one. */
+async function attachCover(url) {
+  if (!picker.itemId) return;
+  await api(`/api/items/${picker.itemId}/cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  closePicker();
+  toast('Cover updated');
+  refreshLibraryQuietly();
+}
+
+$('#paste-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = $('#paste-url').value.trim();
+  if (!url || picker.busy) return;
+
+  picker.busy = true;
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+
+  try {
+    await attachCover(url);
+    $('#paste-url').value = '';
+  } catch (err) {
+    toast(err.message, 6000);
+  } finally {
+    picker.busy = false;
+    btn.disabled = false;
+    btn.textContent = 'Use';
+  }
+});
+
+$('#picker-results').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.pick');
+  if (!btn || picker.busy) return;
+
+  const chosen = picker.results?.[Number(btn.dataset.i)];
+  if (!chosen || !picker.itemId) return;
+
+  picker.busy = true;
+  btn.dataset.state = 'saving';
+
+  try {
+    // The server downloads the image before saving, so a picture that can't be
+    // fetched is rejected here rather than becoming a broken cover later.
+    await attachCover(chosen.url);
+  } catch (err) {
+    toast(err.message, 6000);
+    delete btn.dataset.state;
+  } finally {
+    picker.busy = false;
   }
 });
 
@@ -932,6 +1205,7 @@ async function boot() {
   } catch { /* offline: keep browsing what the page can still reach */ }
 
   renderChatIntro();
+  applyView();
   await buildKindChips();
   await loadLibrary();
 

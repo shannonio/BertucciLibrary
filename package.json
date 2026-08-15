@@ -13,7 +13,9 @@
     "sheet:init": "node scripts/sheet-init.js",
     "sheet:pull": "node scripts/sheet-pull.js",
     "game:links": "node scripts/game-cover-links.js",
-    "covers": "node scripts/cache-covers.js"
+    "covers": "node scripts/cache-covers.js",
+    "games": "node scripts/enrich-games.js",
+    "drive": "node scripts/index-drive.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

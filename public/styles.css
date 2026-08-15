@@ -140,9 +140,99 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 @media (min-width: 620px) { .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); } }
 
-.item { cursor: pointer; text-align: left; border: 0; background: none; padding: 0; font: inherit; color: inherit; }
-.item:active { transform: scale(.97); }
-.item { transition: transform .12s ease; }
+.item { position: relative; }
+/* Anchor the overlay link to the artwork, not the whole card (which includes
+   the title lines below it). */
+.item .cover { position: relative; }
+
+.item-hit {
+  display: block; width: 100%; cursor: pointer; text-align: left;
+  border: 0; background: none; padding: 0; font: inherit; color: inherit;
+  transition: transform .12s ease;
+}
+.item-hit:active { transform: scale(.97); }
+
+/* Direct link to the file, layered over the artwork in grid mode. The link is a
+   sibling of the hit area (nesting an <a> in a <button> is invalid), so it
+   anchors to .item — whose top edge is the top of the cover. Right-hand side
+   keeps it off the type label that sits top-left. */
+.open-link {
+  position: absolute; top: 5px; right: 5px; z-index: 2;
+  width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ink) 68%, transparent);
+  color: var(--bg); backdrop-filter: blur(4px);
+}
+.open-link svg { width: 13px; height: 13px; stroke-width: 2.1; }
+.open-link:active { transform: scale(.92); }
+
+/* ------------------------------------------------------------- list view */
+
+.grid.list {
+  display: flex; flex-direction: column; gap: 0;
+  padding: 4px 14px 4px;
+}
+
+.grid.list .item {
+  display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.grid.list .item:last-child { border-bottom: 0; }
+
+.grid.list .item-hit {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 0; min-width: 0; flex: 1;
+}
+.grid.list .item-hit:active { transform: none; background: var(--surface-2); }
+
+.grid.list .cover {
+  width: 38px; flex: 0 0 38px; aspect-ratio: 2 / 3;
+  border-radius: 4px; box-shadow: none;
+}
+.grid.list .item.game .cover { aspect-ratio: 1 / 1; width: 38px; flex-basis: 38px; }
+
+/* The typeset fallbacks are designed for a large tile; at 38px only a colour
+   band is legible, so hide their text rather than render an unreadable smudge. */
+.grid.list .cover-fallback { padding: 0; }
+.grid.list .cover-fallback .cf-title,
+.grid.list .cover-fallback .cf-author,
+.grid.list .cover-fallback .cf-facts { display: none; }
+.grid.list .cover-fallback .cf-genre {
+  font-size: 7px; line-height: 1.1; padding: 3px 2px; text-align: center;
+  -webkit-line-clamp: 3;
+}
+
+.row-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.grid.list .item-title {
+  margin: 0; font-size: 14px; line-height: 1.3;
+  -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
+.grid.list .item-author {
+  font-size: 11.5px; -webkit-line-clamp: 1;
+}
+
+.row-kind {
+  flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink-3);
+  padding: 2px 6px; border-radius: 4px; background: var(--surface-2);
+}
+
+/* In a row the link sits inline at the end rather than floating over art. */
+.grid.list .open-link {
+  position: static; flex: 0 0 auto;
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--surface-2); color: var(--ink-2);
+  backdrop-filter: none;
+}
+.grid.list .open-link svg { width: 15px; height: 15px; }
+
+.iconbtn {
+  border: 1px solid var(--line); background: var(--surface); cursor: pointer;
+  width: 28px; height: 26px; border-radius: 999px; padding: 0;
+  color: var(--ink-2); display: grid; place-items: center;
+}
+.iconbtn svg { width: 15px; height: 15px; }
+.iconbtn:active { background: var(--surface-2); }
 
 .cover {
   position: relative; width: 100%; aspect-ratio: 2 / 3;
@@ -202,6 +292,25 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   font-family: var(--font); font-size: 13px; font-weight: 650; line-height: 1.22;
   color: inherit; -webkit-line-clamp: 4;
 }
+/* Digital files: a neutral "document" look, distinct from books and games. */
+.cover-fallback.doc {
+  background: linear-gradient(165deg, var(--surface) 0%, var(--surface-2) 100%);
+  border-left: 4px solid var(--ink-3);
+  justify-content: flex-start; gap: 6px;
+}
+.cover-fallback.doc .cf-genre {
+  font-size: 8.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cover-fallback.doc .cf-title {
+  font-family: var(--font); font-size: 12px; font-weight: 600; line-height: 1.25;
+  -webkit-line-clamp: 5;
+}
+.cover-fallback.doc .cf-facts {
+  margin-top: auto; font-size: 9.5px; color: var(--ink-3);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
 .cover-fallback.game .cf-facts {
   margin-top: auto; font-size: 9.5px; line-height: 1.45; opacity: .8;
   font-variant-numeric: tabular-nums;
@@ -251,6 +360,53 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .sheet-grip::before { content: ""; width: 38px; height: 4px; border-radius: 99px; background: var(--line); }
 
 .sheet-body { overflow-y: auto; padding: 4px 20px calc(24px + env(safe-area-inset-bottom)); }
+
+/* ------------------------------------------------------------ cover picker */
+
+.picker { z-index: 43; }
+#picker-backdrop { z-index: 42; }
+
+.picker-head { flex: 0 0 auto; padding: 0 20px 12px; border-bottom: 1px solid var(--line); }
+.picker-head .card-title { margin-bottom: 10px; }
+.picker-head .card-sub { margin: 10px 0 0; }
+
+.picker-body {
+  overflow-y: auto; padding: 14px 20px calc(24px + env(safe-area-inset-bottom));
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  align-content: start;
+}
+
+.pick {
+  border: 1px solid var(--line); background: var(--surface-2); padding: 0;
+  border-radius: 9px; overflow: hidden; cursor: pointer;
+  aspect-ratio: 1 / 1; display: grid; place-items: center; position: relative;
+}
+.pick img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pick:active { transform: scale(.96); }
+.pick[data-state="saving"] { opacity: .55; pointer-events: none; }
+.pick[data-state="saving"]::after {
+  content: ""; position: absolute; width: 20px; height: 20px; border-radius: 50%;
+  border: 2.5px solid var(--line); border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+
+.picker-msg {
+  grid-column: 1 / -1; text-align: center; padding: 26px 10px;
+  font-size: 14px; line-height: 1.55; color: var(--ink-2);
+}
+.picker-msg.err { color: var(--danger); }
+.picker-msg a { color: var(--accent); }
+
+.paste-block { margin-top: 12px; }
+.paste-block summary {
+  font-size: 13px; color: var(--ink-2); cursor: pointer; padding: 3px 0;
+  list-style: none;
+}
+.paste-block summary::-webkit-details-marker { display: none; }
+.paste-block summary::before { content: "＋ "; opacity: .6; }
+.paste-block[open] summary::before { content: "− "; }
+.paste-block form { margin-top: 9px; }
 
 .detail-head { display: flex; gap: 15px; }
 .detail-head .cover { width: 108px; flex: 0 0 108px; }

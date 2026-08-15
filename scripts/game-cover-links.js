@@ -4,13 +4,13 @@
  *
  *   npm run game:links
  *
- * BGG sits behind Cloudflare bot protection, so covers can't be fetched
- * automatically — but a person browsing the site normally is exactly what it's
- * built for. This just removes the tedious part: finding each game.
+ * Useful when BGG_TOKEN is not set: BGG's site sits behind bot protection, so
+ * covers cannot be fetched automatically, but browsing it yourself is exactly
+ * what it is built for. This removes the tedious part — finding each game.
  *
- * The links go in column Z. Sync only reads and writes columns A-Y, so this
- * column is invisible to the app and is never overwritten. Delete it whenever
- * you're done.
+ * The links go one column past the catalog columns, computed from
+ * SHEET_COLUMNS, so sync never reads or overwrites them. Delete the column
+ * whenever you are done.
  */
 import 'dotenv/config';
 import { JWT } from 'google-auth-library';
@@ -18,12 +18,20 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { db } from '../server/db.js';
-import { isConfigured, configProblem, sheetUrl } from '../server/sheets.js';
+import { isConfigured, configProblem, sheetUrl, SHEET_COLUMNS } from '../server/sheets.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..');
 
-const HELPER_COL = 'Z';
+const colLetter = (i) => {
+  let s = '';
+  for (let n = i; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s;
+  return s;
+};
+
+// Sit one column clear of the synced range, computed rather than hardcoded —
+// adding a catalog column previously would have let sync overwrite these links.
+const HELPER_COL = colLetter(SHEET_COLUMNS.length + 1);
 const TAB = 'Board Games';
 
 if (!isConfigured()) {
@@ -66,6 +74,32 @@ async function call(method, url, body) {
   if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
   return res.json();
 }
+
+// The helper column sits past the catalog columns, which means it can fall
+// outside the sheet's actual grid — writing there fails with "exceeds grid
+// limits". Widen the tab first if needed.
+async function ensureWidth(minColumns) {
+  const meta = await call('GET', `${API}?fields=sheets.properties(sheetId,title,gridProperties)`);
+  const tab = meta.sheets.find((s) => s.properties.title === TAB);
+  if (!tab) throw new Error(`No "${TAB}" tab in the spreadsheet.`);
+
+  const have = tab.properties.gridProperties.columnCount;
+  if (have >= minColumns) return;
+
+  await call('POST', `${API}:batchUpdate`, {
+    requests: [
+      {
+        appendDimension: {
+          sheetId: tab.properties.sheetId,
+          dimension: 'COLUMNS',
+          length: minColumns - have,
+        },
+      },
+    ],
+  });
+}
+
+await ensureWidth(SHEET_COLUMNS.length + 2);
 
 // Read the tab so links line up with the rows actually present, in their
 // current order — the Sheet may have been sorted by hand.
@@ -115,5 +149,5 @@ console.log(`  ${sheetUrl()}\n`);
 console.log('  For each game: click the link, open the game on BGG, right-click');
 console.log('  the box image, "Copy Image Address", and paste it into that row\'s');
 console.log('  cover_url cell. The app picks it up on the next sync.\n');
-console.log(`  Column ${HELPER_COL} is outside the synced range (A-Y), so it is never`);
-console.log('  overwritten. Delete it when you are finished.\n');
+console.log(`  Column ${HELPER_COL} is outside the synced range (A-${colLetter(SHEET_COLUMNS.length - 1)}), so it is`);
+console.log('  never overwritten. Delete it when you are finished.\n');

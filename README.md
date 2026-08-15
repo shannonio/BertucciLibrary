@@ -4,6 +4,11 @@ A phone-friendly catalog of the home library and homeschool supplies. Browse by
 cover, search everything, ask Claude what to build a lesson from, and add new
 things by ISBN or by photographing a shelf.
 
+> **Setting this up on a different computer, or coming back after a while?**
+> Read [`PROJECT-NOTES.md`](PROJECT-NOTES.md) first — current state, the two
+> files that can't be regenerated, why things are built the way they are, and
+> what's already been tried and ruled out.
+
 ---
 
 ## Running it
@@ -25,6 +30,121 @@ Home Screen** to install it as an app — it opens full-screen with its own icon
 
 The Mac has to be awake and running `npm start` for the phone to reach it.
 
+## Running it always-on, on the tailnet
+
+Moving it to a Mac that stays on, reachable at
+`https://<server>.<tailnet>.ts.net` and nowhere else.
+
+### 1. Copy it across
+
+```bash
+# On the server
+git clone <or copy the folder>   # → e.g. ~/Development/BertucciLibrary
+cd BertucciLibrary
+npm install
+```
+
+**`npm install` must run on the server.** `better-sqlite3` is a native module
+compiled for the machine it's installed on — copying `node_modules` across gives
+an "invalid ELF header"-style crash on first run.
+
+Then copy the two things that can't be regenerated:
+
+| From the Mac | Why |
+|---|---|
+| `.env` | API keys and the Sheet id |
+| `bertuccilibrary-*.json` | Service-account key for Sheets and Drive |
+
+And optionally these, which are rebuildable but slow:
+
+| From the Mac | Rebuild instead with | Takes |
+|---|---|---|
+| `data/library.db` | `npm run sheet:pull` + `npm run drive -- …` | ~25 min |
+| `data/covers/` (36 MB) | `npm run covers` | ~15 min |
+
+Copying is quicker and preserves the Drive index. Both are in `.gitignore`, so
+move them by hand:
+
+```bash
+scp -r .env bertuccilibrary-*.json data/ server:~/Development/BertucciLibrary/
+```
+
+### 2. Stop the Mac from sleeping
+
+A sleeping Mac stops serving. This is the step people forget:
+
+```bash
+sudo pmset -a sleep 0 disksleep 0
+sudo pmset -a womp 1        # wake on network access
+```
+
+Leave `displaysleep` alone — the screen can sleep, the machine shouldn't.
+
+### 3. Install the service
+
+```bash
+./scripts/install-service.sh
+```
+
+This writes a launchd agent that starts the app at login, restarts it if it
+crashes, and logs to `data/logs/`. It binds **127.0.0.1 only**, so the app is
+not on your LAN at all — Tailscale is the only way in.
+
+It fails early and says why if Node is too old, `.env` is missing, or
+`node_modules` hasn't been built.
+
+```bash
+./scripts/install-service.sh --uninstall   # to remove
+```
+
+> The agent runs at *login*, which suits a Mac with auto-login enabled. For a
+> genuinely headless Mac that serves before anyone logs in, the same plist can
+> go in `/Library/LaunchDaemons` with a `UserName` key — but note that App Store
+> Tailscale also needs a logged-in user, so auto-login is usually the simpler
+> path.
+
+### 4. Publish it on the tailnet
+
+```bash
+tailscale serve --bg 4173
+tailscale serve status
+```
+
+That gives you `https://<server>.<tailnet>.ts.net` — a real certificate, no port
+number, and reachable only from devices on your tailnet. It survives reboots.
+
+On your phone, open that URL and **Share → Add to Home Screen** as before. It
+works from anywhere Tailscale is connected, not just at home.
+
+### Checking on it
+
+```bash
+launchctl list | grep bertucci          # is it running?
+tail -f data/logs/library.log           # what it's doing
+tail -n 40 data/logs/library.error.log  # why it isn't
+launchctl kickstart -k gui/$(id -u)/com.bertucci.library   # restart it
+```
+
+### Access model
+
+There is deliberately **no login**. The tailnet is the security boundary: the
+app binds to localhost, and Tailscale decides who reaches it. That keeps the
+app itself simple and means there's no password to manage or rotate.
+
+The one thing to remember is that this makes tailnet membership the whole
+access-control story — if you ever share the tailnet with someone who shouldn't
+edit the catalog, Tailscale ACLs can limit which devices reach the service
+without touching the app.
+
+### Keeping it fresh
+
+Once it's always-on, the periodic jobs are worth scheduling — Drive gains files,
+and covers can be retried. `npm run drive -- …` and `npm run covers` are both
+safe to re-run; a `launchd` `StartCalendarInterval` agent or a cron entry does
+the job. Not set up by default.
+
+---
+
 ## Turning on the Claude features
 
 The **Ask** tab and **photo scanning** need an Anthropic API key. Everything
@@ -45,10 +165,23 @@ glance whether it's configured.
 
 ## What each tab does
 
-**Library** — every item as a cover. Search runs over titles, authors, genres,
-subjects, summaries, tags, and notes, and updates as you type. Tap any cover for
-the full record, including ISBN. Once you have more than one type of item, filter
-chips appear at the top.
+**Library** — search runs over titles, authors, genres, subjects, summaries,
+tags, and notes, and updates as you type. Tap anything for the full record.
+Filter chips at the top narrow by kind.
+
+Two layouts, toggled by the button next to the item count, remembered between
+sessions:
+
+- **Grid** — covers at a glance. Best for books and games, where the artwork is
+  how you recognise something.
+- **List** — one row each with a thumbnail, title, and subtitle. Best for the
+  thousands of Drive files, where the filename and folder identify the item and
+  a cover would say nothing. The subtitle adapts: author for books, players and
+  play time for games, folder path for files.
+
+Anything with a file link shows an **open** button — top-right of the cover in
+grid, at the end of the row in list — that goes straight to Google Drive without
+opening the detail sheet first.
 
 **Ask** — plain-language questions about the collection. Claude *searches the
 actual catalog* before answering rather than guessing from memory, so
@@ -177,25 +310,79 @@ explicitly shared with it.
 
 ---
 
-## Why board games have no cover art
+## Cover art for board games
 
-Short version: there is no free, legal source for board game box art, so the
-games show designed cards instead of photos.
+**BoardGameGeek is the source** — it has box art for essentially every game
+here. Their XML API requires registration and a bearer token (free, open to
+everyone); see *Board game covers from BGG* below.
 
-What was tried:
+Until that token is in place, games show a designed card with genre, player
+count, play time, and age — the things that decide whether a game fits the
+afternoon — with colour derived from genre so the shelf groups by type.
 
-| Source | Why it didn't work |
-|---|---|
-| **BoardGameGeek** | Has box art for essentially every game here. Their XML API now returns `401 Unauthorized` on every endpoint — a policy change, not a rate limit. |
-| **Wikipedia** | Matches were wrong. "Mycelia" resolved to *Avatar: Fire and Ash*; "Monopoly Jackpot" to generic Monopoly. |
-| **Wikidata** | Matches were correct (entity-typed, so no wrong-topic hits) but the images are Creative Commons *gameplay photos* — a table mid-game, not a box. Box art is copyrighted, so Commons can't host it. Roughly half of famous games, almost none of the educational ones. |
+Two sources that don't work, for the record: **Wikipedia** returns wrong games
+("Mycelia" → *Avatar: Fire and Ash*), and **Wikidata** returns correctly-matched
+but Creative Commons *gameplay photos* rather than box art, since box art is
+copyrighted.
 
-A wrong or irrelevant photo is worse than none, so instead each game gets a card
-showing its genre, player count, play time, and age — the things that decide
-whether it fits the afternoon. Colour is derived from genre, so the shelf groups
-visually by type of game.
+### Find a cover from inside the app
 
-### Getting real art for a game
+Open any item and tap **Find a cover**. It searches for cover images, shows a
+grid of results, and attaching one downloads, caches, and pushes it to the Sheet.
+Edit the search box if the first results aren't right.
+
+The image is downloaded *before* it's saved, so a picture that can't be fetched
+is rejected while the picker is still open rather than becoming a broken cover
+you find later.
+
+**No setup required.** It searches Google Books and Open Library, using the key
+you already have for ISBN lookups.
+
+**Books** get real results — often several editions of the same title, so you
+can pick the cover matching the copy on your shelf.
+
+**Board games** come from BoardGameGeek once `BGG_TOKEN` is set (see below).
+Without it the picker says so plainly, links straight to that game on BGG, and
+opens a paste box — right-click the box image there, copy the address, paste it
+in. Same verify-download-cache-sync path either way.
+
+### Board game covers from BGG
+
+BGG requires registration and a bearer token for XML API access — open to
+everyone, commercial or not:
+
+1. Register at <https://boardgamegeek.com/using_the_xml_api> (needs a BGG account)
+2. Put the application token in `.env`:
+   ```
+   BGG_TOKEN=your-application-token
+   ```
+3. Restart the server
+
+Then fill in every game at once:
+
+```bash
+npm run games              # games missing a cover
+npm run games -- --retry   # re-attempt failures
+npm run games -- --limit 10
+```
+
+As well as box art this fills in **designers** (the `creator` column, currently
+empty for games), publisher, year, and a description. It only fills fields that
+are *blank* — your CSV's player counts and age ratings win, because they
+describe the copy you own.
+
+Titles that don't match get listed at the end; fix those individually with
+**Find a cover**.
+
+> **Why not Google Images?** There is no public Google Images API. The official
+> route was the Custom Search JSON API, which Google has since **closed to new
+> customers** and is discontinuing entirely on 2027-01-01 — a new project gets
+> `403 "This project does not have the access to Custom Search JSON API"` no
+> matter how it's configured. Bing's equivalent was retired in 2025. Google
+> Books plus Open Library covers books well and needs no extra credentials,
+> which is why the picker uses them.
+
+### Getting art for a game manually
 
 Paste an image URL into that game's `cover_url` cell in the **Board Games** tab.
 It appears in the app on the next sync. This works for any item, and is the
@@ -288,10 +475,85 @@ Pick the kind in the **Add → Add manually** form. Board games get `players` an
 `notes`. Search and the Ask tab pick up new kinds automatically — no code
 changes needed.
 
-### Digital curriculum
+### Digital curriculum from Google Drive
 
-There's a `file_path` column ready for pointing an item at a PDF on disk. The
-MVP doesn't upload or serve those files yet — see *Not built yet* below.
+Index a Drive folder so your PDFs, worksheets, and lesson plans turn up in the
+same search as the books — and get used by the Ask tab when planning.
+
+**Setup:** share the folder with the service account (the same address the Sheet
+is shared with) — **Viewer** is enough, nothing is ever written.
+
+```bash
+npm run drive                        # show what's shared with the app
+npm run drive -- --find homeschool   # locate a folder by name
+npm run drive -- --folder <id>       # index it
+```
+
+Then:
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | Show what would be indexed, grouped by folder. Writes nothing. |
+| `--exclude a,b` | Skip any file whose path contains these words |
+| `--no-text` | Skip text extraction; index names and folders only (much faster) |
+| `--prune` | Remove entries for files deleted from Drive |
+
+**Run `--dry-run` first on a folder you haven't indexed before.** A curriculum
+folder usually also holds records *about* the children — progress reports,
+assessments, portfolios. Those shouldn't end up in a searchable catalog that
+syncs to a spreadsheet and is read by an AI assistant, and the dry run is where
+you'd notice them.
+
+**The command used for the current index** — keep the exclusions on every
+re-run, or the skipped files come straight back:
+
+```bash
+npm run drive -- \
+  --folder 1xkHLGbJ2BlvMAHhBDiA2Qqxn5JqLizMQ \
+  --exclude "monthly progress,monthly reports,schedule and supply,master list" \
+  --exclude-ext "css,js,html" \
+  --prune
+```
+
+`--prune` is what removes entries that a *new* exclusion now covers; without it,
+tightening a filter leaves the old rows in place.
+
+What each exclusion is for:
+
+| Pattern | Why |
+|---|---|
+| `monthly progress`, `monthly reports` | 38 Google Docs of per-child progress reports |
+| `schedule and supply` | 4 planning spreadsheets whose text lists the children by name |
+| `master list` | The catalog spreadsheet itself, which otherwise indexes into the catalog |
+| `--exclude-ext css,js,html` | 475 web assets from curriculum bundles downloaded as zips |
+
+**Always skipped, no flag needed:** `.DS_Store`, `Thumbs.db`, `__MACOSX`, and
+anything inside a `*_files/` folder. That last one matters more than it sounds —
+saving a web page as HTML writes a `PageName_files/` sidecar of fonts, avatars,
+and site chrome beside it. In this collection that was 84 files, including the
+same site logo 21 times and Google Font stylesheets named `css2` with no
+extension at all, which no extension filter would catch.
+
+Only Google Docs/Sheets/Slides have their text extracted, so those are the files
+where personal detail can end up in the catalog. PDFs are name-and-folder only —
+which is why the report folders had to be excluded outright rather than relying
+on `--no-text`.
+
+**Nothing is downloaded or copied.** The index stores each file's name, folder
+path, type, and a link back to Drive. Tapping an item opens **Open file**, which
+goes straight to Drive.
+
+**Folder names become subjects.** A file at `Homeschool/Math/Grade 3/Fractions.pdf`
+is indexed with subject *"Math, Grade 3"*, so searching "grade 3" finds it. That
+taxonomy you already built by organising folders is the useful part.
+
+**Google Docs, Slides and Sheets also get their text extracted** (Drive can
+export those natively), so searching finds words *inside* them, not just the
+filename. PDFs and Office files are indexed by name and folder only — extracting
+PDF text would need a parser, which isn't built.
+
+Re-running is safe: files are matched on their Drive id, so a refresh updates
+existing entries rather than duplicating them.
 
 ---
 
@@ -416,8 +678,8 @@ cp data/library.db ~/Dropbox/library-$(date +%Y%m%d).db
 
 Deliberately left out of this first version:
 
-- **Digital curriculum upload.** The `file_path` column exists but there's no
-  upload or in-app reader. Needs a decision about where PDFs live.
+- **PDF text extraction.** Drive-indexed PDFs are searchable by filename and
+  folder, but not by their contents. Google Docs/Slides/Sheets already are.
 - **Barcode scanning by camera.** ISBNs are typed today. A live barcode scanner
   is worth adding if you're cataloguing in bulk.
 - **Editing an item after it's saved.** You can add and remove; changing a title

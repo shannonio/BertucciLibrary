@@ -22,6 +22,10 @@
       <h1 class="brand">Library</h1>
       <div class="topbar-right">
         <span class="count" id="lib-count"></span>
+        <button class="iconbtn" id="view-toggle" title="Switch between grid and list">
+          <svg id="view-icon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+          <span class="sr-only">Switch view</span>
+        </button>
         <button class="syncbtn" id="sync-btn" hidden title="Sync with Google Sheet">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-.6 3"/><path d="M20 5v6h-6"/></svg>
           <span class="syncbtn-label" id="sync-label">Sync</span>
@@ -160,6 +164,29 @@
 <aside class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-label="Item details">
   <button class="sheet-grip" id="sheet-close" aria-label="Close"></button>
   <div class="sheet-body" id="sheet-body"></div>
+</aside>
+
+<!-- ========================================================= COVER PICKER -->
+<div class="sheet-backdrop" id="picker-backdrop" hidden></div>
+<aside class="sheet picker" id="picker" hidden role="dialog" aria-modal="true" aria-label="Choose a cover image">
+  <button class="sheet-grip" id="picker-close" aria-label="Close"></button>
+  <div class="picker-head">
+    <h2 class="card-title" id="picker-title">Find a cover</h2>
+    <form class="row" id="picker-form">
+      <input id="picker-q" type="search" placeholder="Search for an image…"
+             autocomplete="off" enterkeyhint="search">
+      <button class="btn primary" type="submit" id="picker-go">Search</button>
+    </form>
+    <p class="card-sub" id="picker-hint">Tap an image to use it as the cover.</p>
+    <details class="paste-block" id="paste-block">
+      <summary>Paste an image URL instead</summary>
+      <form class="row" id="paste-form">
+        <input id="paste-url" type="url" placeholder="https://…" autocomplete="off" spellcheck="false">
+        <button class="btn" type="submit">Use</button>
+      </form>
+    </details>
+  </div>
+  <div class="picker-body" id="picker-results"></div>
 </aside>
 
 <!-- ================================================================ NAV -->

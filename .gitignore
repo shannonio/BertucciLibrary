@@ -12,3 +12,6 @@ bertuccilibrary-*.json
 
 # Cached cover images — rebuildable with: npm run covers
 data/covers/
+
+# Service logs
+data/logs/
