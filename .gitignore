@@ -15,3 +15,8 @@ data/covers/
 
 # Service logs
 data/logs/
+
+# Recipe-card images people upload in the meal planner, plus the titles and
+# tags that go with them. Family data, not source: it belongs in a backup, not
+# in git history.
+data/meal-cards/

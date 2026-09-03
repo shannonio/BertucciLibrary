@@ -64,6 +64,10 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .card-actions{position:absolute;right:5px;top:5px;display:flex;gap:3px}
 .card-actions button{width:24px;height:24px;border-radius:7px;border:0;background:rgba(255,255,255,.92);cursor:pointer;font-size:12px;line-height:1;padding:0;box-shadow:0 1px 4px rgba(0,0,0,.12);color:var(--ink)}
 .card-actions button:hover{background:#fff}
+.upload-status{font-size:11.5px;color:var(--muted);line-height:1.4;min-height:0}
+.upload-status:empty{display:none}
+.upload-status.ok{color:var(--sage-dark);font-weight:700}
+.upload-status.warn{color:#9a4f31;font-weight:700}
 .restore-line{font-size:11.5px;color:var(--muted);margin-top:10px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .restore-line[hidden]{display:none}
 .linkish{border:0;background:none;padding:0;color:var(--sage-dark);text-decoration:underline;cursor:pointer;font-size:11.5px}
@@ -119,7 +123,8 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
       <option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Other</option>
     </select>
     <button class="btn primary" id="addUpload">Add to Library</button>
-    <div class="helper" style="margin:0">Imported cards are saved in this browser using IndexedDB.</div>
+    <div class="upload-status" id="uploadStatus"></div>
+    <div class="helper" style="margin:0" id="uploadWhere">Cards are uploaded to the server, so they appear on every device.</div>
   </div>
   <div class="restore-line" id="restoreLine" hidden></div>
 </aside>
@@ -187,8 +192,22 @@ function isCustom(id){return !builtinRecipes.some(r=>r.id===id)}
 function readJSON(key,fallback){
   try{ const v=JSON.parse(localStorage.getItem(key)); return v==null?fallback:v }catch{ return fallback }
 }
-function hiddenIds(){ const v=readJSON("mealplan:hidden",[]); return Array.isArray(v)?v:[] }
-function overrides(){ const v=readJSON("mealplan:overrides",{}); return v&&typeof v==="object"?v:{} }
+
+// The recipe library lives on the server, so every device sees the same cards.
+// serverLib is null until we know that server is actually there — opened as a
+// file:// page, or with the server down, the app falls back to the browser-only
+// behaviour it had before, so it still works off a memory stick.
+let serverLib = null;
+const onServer = () => serverLib !== null;
+
+function hiddenIds(){
+  if(onServer()) return serverLib.hidden;
+  const v=readJSON("mealplan:hidden",[]); return Array.isArray(v)?v:[];
+}
+function overrides(){
+  if(onServer()) return serverLib.overrides;
+  const v=readJSON("mealplan:overrides",{}); return v&&typeof v==="object"?v:{};
+}
 
 // Built-in cards are a const in this page, so an edit to one is stored beside
 // it as an override keyed by id rather than written over it. The original text
@@ -292,7 +311,18 @@ function renderRestore(){
   restoreLine.innerHTML=`<span>${h.length} card${h.length>1?"s":""} removed from the library. Anything already planned is unchanged.</span>`;
   const b=document.createElement("button");
   b.className="linkish"; b.textContent="Restore all";
-  b.onclick=()=>{ localStorage.removeItem("mealplan:hidden"); renderLibrary() };
+  b.onclick=async()=>{
+    if(onServer()){
+      try{
+        const res=await fetch(`${API}/hidden/clear`,{method:"POST"});
+        if(!res.ok) throw new Error("HTTP "+res.status);
+        serverLib=await fetchLibrary(); customRecipes=serverLib.custom; rebuildRecipes();
+      }catch(err){ console.warn("could not restore",err); return }
+    }else{
+      localStorage.removeItem("mealplan:hidden");
+    }
+    renderLibrary();
+  };
   restoreLine.appendChild(b);
 }
 
@@ -324,31 +354,54 @@ document.addEventListener("keydown",e=>{
 
 editSave.onclick=async()=>{
   const r=recipeById(editingId); if(!r) return closeEdit();
+  const id=editingId;
   const patch={
     title: editTitle.value.trim()||r.title,
     category: editCategory.value,
     tags: editTags.value.split(",").map(t=>t.trim()).filter(Boolean),
   };
-  if(isCustom(editingId)){
-    // A custom card owns its record, so the edit is written straight to it.
-    const rec={...r,...patch};
-    try{
+  editSave.disabled=true;
+  try{
+    if(onServer()){
+      const res=await fetch(`${API}/cards/${encodeURIComponent(id)}`,
+        {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      serverLib=await fetchLibrary(); customRecipes=serverLib.custom;
+    }else if(isCustom(id)){
+      // A custom card owns its record, so the edit is written straight to it.
+      const rec={...r,...patch};
       const db=await dbOpen(), tx=db.transaction("recipes","readwrite");
-      tx.objectStore("recipes").put(rec);
-      await txDone(tx);
+      tx.objectStore("recipes").put(rec); await txDone(tx);
       customRecipes=customRecipes.map(c=>c.id===rec.id?rec:c);
-    }catch(err){ console.warn("could not save the edit",err); return }
-  }else{
-    const ov=overrides(); ov[editingId]=patch;
-    localStorage.setItem("mealplan:overrides",JSON.stringify(ov));
-  }
-  rebuildRecipes(); renderLibrary(); renderWeek(); closeEdit();
+    }else{
+      const ov=overrides(); ov[id]=patch;
+      localStorage.setItem("mealplan:overrides",JSON.stringify(ov));
+    }
+    rebuildRecipes(); renderLibrary(); renderWeek(); closeEdit();
+  }catch(err){
+    console.warn("could not save the edit",err);
+    editNote.textContent="Could not save that — the change is not stored. "+(err.message||err);
+  }finally{ editSave.disabled=false }
 };
 
-editDelete.onclick=()=>{
-  const h=hiddenIds();
-  if(!h.includes(editingId)){ h.push(editingId); localStorage.setItem("mealplan:hidden",JSON.stringify(h)) }
-  renderLibrary(); closeEdit();
+editDelete.onclick=async()=>{
+  const id=editingId;
+  editDelete.disabled=true;
+  try{
+    if(onServer()){
+      const res=await fetch(`${API}/cards/${encodeURIComponent(id)}`,{method:"DELETE"});
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      serverLib=await fetchLibrary(); customRecipes=serverLib.custom;
+      rebuildRecipes();
+    }else{
+      const h=hiddenIds();
+      if(!h.includes(id)){ h.push(id); localStorage.setItem("mealplan:hidden",JSON.stringify(h)) }
+    }
+    renderLibrary(); closeEdit();
+  }catch(err){
+    console.warn("could not remove the card",err);
+    editNote.textContent="Could not remove that card. "+(err.message||err);
+  }finally{ editDelete.disabled=false }
 };
 function openRecipe(id){
   const r=recipeById(id); if(!r)return;
@@ -430,7 +483,17 @@ search.addEventListener("input",renderLibrary);
 closeModal.onclick=()=>modal.classList.remove("open");
 modal.onclick=e=>{if(e.target===modal)modal.classList.remove("open")}
 
-// IndexedDB for user-added image cards
+// ---------------------------------------------------------------- storage
+//
+// Uploaded cards used to live in this browser's IndexedDB, which made every
+// device an island. They are now POSTed to the server and written to disk
+// beside the built-in ones, so a card added on the iPad is there on every
+// screen. IndexedDB is still read once, to carry anything already added here up
+// to the server, and is still the whole story when there is no server.
+
+const API = "/api/meals";
+const SHARED_NOTE = "Cards are uploaded to the server, so they appear on every device.";
+
 function dbOpen(){
   return new Promise((resolve,reject)=>{
     const req=indexedDB.open("RecipePlannerDB",1);
@@ -438,20 +501,152 @@ function dbOpen(){
     req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
   })
 }
-async function loadCustom(){
-  try{
-    const db=await dbOpen(), tx=db.transaction("recipes","readonly"), store=tx.objectStore("recipes");
-    const req=store.getAll();
-    req.onsuccess=()=>{customRecipes=req.result||[];rebuildRecipes();renderLibrary();renderWeek()}
-  }catch(e){console.warn(e)}
+function readLocalCards(){
+  return new Promise((resolve)=>{
+    dbOpen().then(db=>{
+      const req=db.transaction("recipes","readonly").objectStore("recipes").getAll();
+      req.onsuccess=()=>resolve(req.result||[]);
+      req.onerror=()=>resolve([]);
+    }).catch(()=>resolve([]));
+  })
 }
+function txDone(tx){
+  return new Promise((res,rej)=>{tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error)});
+}
+
+function setStatus(msg,kind){
+  uploadStatus.textContent=msg||"";
+  uploadStatus.className="upload-status"+(kind?" "+kind:"");
+}
+
+async function fetchLibrary(){
+  const res=await fetch(`${API}/library`,{cache:"no-store"});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const doc=await res.json();
+  return {
+    custom: Array.isArray(doc.custom)?doc.custom:[],
+    overrides: doc.overrides&&typeof doc.overrides==="object"?doc.overrides:{},
+    hidden: Array.isArray(doc.hidden)?doc.hidden:[],
+  };
+}
+
+async function loadCustom(){
+  if(location.protocol!=="file:"){
+    try{
+      serverLib=await fetchLibrary();
+      customRecipes=serverLib.custom;
+      // Reset the note: a previous attempt may have left the offline one up.
+      uploadWhere.textContent=SHARED_NOTE;
+      rebuildRecipes();renderLibrary();renderWeek();
+      await pushUpLocalCards();
+      return;
+    }catch(err){
+      console.warn("meal library server unavailable, using this browser only",err);
+      serverLib=null;
+      uploadWhere.textContent="No server reachable — cards added here stay in this browser only.";
+    }
+  }
+  // No server: the old browser-only behaviour, unchanged.
+  if(location.protocol==="file:") uploadWhere.textContent="Opened as a file — cards added here stay in this browser only.";
+  customRecipes=await readLocalCards();
+  rebuildRecipes();renderLibrary();renderWeek();
+}
+
+// One-off. Anything added on this device before the library moved to the server
+// is carried up, ids and all, so it stops being stranded here. The local copies
+// are left exactly where they are — this only ever adds.
+async function pushUpLocalCards(){
+  if(localStorage.getItem("mealplan:uploaded")==="1") return;
+  try{
+    const local=await readLocalCards();
+    const known=new Set(serverLib.custom.map(c=>c.id));
+    for(const rec of local){
+      if(known.has(rec.id)||!rec.image) continue;
+      try{
+        const blob=await (await fetch(rec.image)).blob();
+        const thumb=await makeThumb(blob);
+        const fd=new FormData();
+        fd.append("id",rec.id);
+        fd.append("title",rec.title||"Untitled");
+        fd.append("category",rec.category||"Other");
+        fd.append("tags",(rec.tags||[]).join(", "));
+        fd.append("image",blob,"card");
+        if(thumb) fd.append("thumb",thumb,"thumb.jpg");
+        const res=await fetch(`${API}/cards`,{method:"POST",body:fd});
+        if(!res.ok) throw new Error("HTTP "+res.status);
+      }catch(err){ console.warn("could not carry up "+rec.id,err); return }
+    }
+    // Edits and removals made here before the move come up too.
+    const ov=readJSON("mealplan:overrides",{})||{};
+    for(const [id,patch] of Object.entries(ov)){
+      await fetch(`${API}/cards/${encodeURIComponent(id)}`,
+        {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});
+    }
+    for(const id of (readJSON("mealplan:hidden",[])||[])){
+      await fetch(`${API}/cards/${encodeURIComponent(id)}`,{method:"DELETE"});
+    }
+    localStorage.setItem("mealplan:uploaded","1");
+    serverLib=await fetchLibrary();
+    customRecipes=serverLib.custom;
+    rebuildRecipes();renderLibrary();renderWeek();
+  }catch(err){ console.warn("could not carry local cards up to the server",err) }
+}
+
+// A 1536px card is several megabytes; twenty of them at 90px in the grid is a
+// lot of decoding for an iPad. The browser makes a small version at upload time
+// and sends both, so the grid pulls kilobytes and only the full card costs.
+function loadImage(src){
+  return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src});
+}
+async function makeThumb(file,max=440){
+  let url;
+  try{
+    url=URL.createObjectURL(file);
+    const img=await loadImage(url);
+    const scale=Math.min(1,max/Math.max(img.width,img.height));
+    const w=Math.max(1,Math.round(img.width*scale)), h=Math.max(1,Math.round(img.height*scale));
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d").drawImage(img,0,0,w,h);
+    return await new Promise(r=>c.toBlob(r,"image/jpeg",0.82));
+  }catch(err){
+    // A format the canvas cannot decode just means no thumbnail; the full image
+    // is used in the grid instead, which is slower but correct.
+    console.warn("no thumbnail made",err); return null;
+  }finally{ if(url) URL.revokeObjectURL(url) }
+}
+
 addUpload.onclick=async()=>{
   const file=uploadFile.files[0], title=uploadTitle.value.trim();
-  if(!file||!title){alert("Choose an image and enter a recipe name.");return}
-  const data=await fileToDataURL(file);
-  const rec={id:"u"+Date.now(),title,category:uploadCategory.value,tags:["Custom"],image:data,thumb:data};
-  const db=await dbOpen(), tx=db.transaction("recipes","readwrite");tx.objectStore("recipes").put(rec);
-  tx.oncomplete=()=>{customRecipes.push(rec);rebuildRecipes();uploadFile.value="";uploadTitle.value="";renderLibrary()}
+  if(!file||!title){ setStatus("Choose an image and enter a recipe name.","warn"); return }
+  addUpload.disabled=true;
+  setStatus(onServer()?"Uploading…":"Saving…");
+  try{
+    if(onServer()){
+      const thumb=await makeThumb(file);
+      const fd=new FormData();
+      fd.append("title",title);
+      fd.append("category",uploadCategory.value);
+      fd.append("tags","Custom");
+      fd.append("image",file,file.name||"card");
+      if(thumb) fd.append("thumb",thumb,"thumb.jpg");
+      const res=await fetch(`${API}/cards`,{method:"POST",body:fd});
+      if(!res.ok) throw new Error((await res.json().catch(()=>({}))).error||("HTTP "+res.status));
+      serverLib=await fetchLibrary();
+      customRecipes=serverLib.custom;
+      setStatus("Added. It is on every device now.","ok");
+    }else{
+      const data=await fileToDataURL(file);
+      const rec={id:"u"+Date.now(),title,category:uploadCategory.value,tags:["Custom"],image:data,thumb:data};
+      const db=await dbOpen(), tx=db.transaction("recipes","readwrite");
+      tx.objectStore("recipes").put(rec); await txDone(tx);
+      customRecipes.push(rec);
+      setStatus("Added to this browser.","ok");
+    }
+    rebuildRecipes(); uploadFile.value=""; uploadTitle.value=""; renderLibrary();
+  }catch(err){
+    console.warn(err);
+    setStatus("Could not add that card: "+(err.message||err),"warn");
+  }finally{ addUpload.disabled=false }
 }
 function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f)})}
 

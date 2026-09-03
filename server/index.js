@@ -15,6 +15,7 @@ import { ask, scanShelfImage, isConfigured, describeError, MODEL } from './claud
 import * as sheets from './sheets.js';
 import * as imagesearch from './imagesearch.js';
 import { COVER_DIR, localCoverFor, cacheCover, cacheStats } from './covers.js';
+import { registerMealRoutes } from './meals.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -76,33 +77,9 @@ app.use('/covers', (req, res) => res.status(404).end());
 
 // ---------------------------------------------------------------- Meal planner
 //
-// A self-contained static page (`meal_planner_dashboard/`) with its own
-// full-resolution recipe cards. It has no API and keeps no server state — a
-// week's plan lives in the browser's localStorage, imported cards in IndexedDB
-// — so it is mounted here rather than run as a second launchd service on a
-// second port.
-const MEALS_DIR = path.join(here, '..', 'meal_planner_dashboard');
-
-app.use(
-  '/meals',
-  express.static(MEALS_DIR, {
-    etag: true,
-    lastModified: true,
-    setHeaders: (res, filePath) => {
-      // The recipe cards are ~3 MB PNGs that never change once written, so they
-      // cache hard. The page itself must not, or an edit would take a week to
-      // reach the iPad.
-      res.setHeader(
-        'Cache-Control',
-        filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=604800, immutable'
-      );
-    },
-  })
-);
-
-// Same reason as /covers above: without this, a missing card falls through to
-// the JSON API's error path and returns a 500 instead of a 404.
-app.use('/meals', (req, res) => res.status(404).end());
+// The planner page, its uploaded recipe cards, and the small API behind them.
+// See server/meals.js — the week plan itself stays in the browser.
+registerMealRoutes(app);
 
 const upload = multer({
   storage: multer.memoryStorage(),
