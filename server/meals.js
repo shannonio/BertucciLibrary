@@ -15,8 +15,10 @@
  * checked into git; this is family data that is not, and mixing the two would
  * put uploads one `git clean` away from being deleted.
  *
- * What still belongs to the browser is the week plan itself. Nothing here
- * touches it.
+ * The week plan moved here later, for the same reason and after the same
+ * complaint: a week dragged together on the laptop did not exist on the iPad,
+ * which is most of what a meal planner is for. Plans live in their own
+ * document, one entry per week.
  */
 import fs from 'fs';
 import path from 'path';
@@ -35,7 +37,14 @@ export const MEAL_CARD_DIR = path.join(here, '..', 'data', 'meal-cards');
 const IMAGE_DIR = path.join(MEAL_CARD_DIR, 'images');
 const LIBRARY_FILE = path.join(MEAL_CARD_DIR, 'library.json');
 
+// The week plans are family data like the library, but they are not cards and
+// nothing here is ever served as a file, so they get a directory of their own
+// rather than a filename inside the one that is.
+export const MEAL_PLAN_DIR = path.join(here, '..', 'data', 'meal-plans');
+const PLAN_FILE = path.join(MEAL_PLAN_DIR, 'plans.json');
+
 fs.mkdirSync(IMAGE_DIR, { recursive: true });
+fs.mkdirSync(MEAL_PLAN_DIR, { recursive: true });
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 const CATEGORIES = ['Breakfast', 'Lunch', 'Dinner', 'Other'];
@@ -71,12 +80,103 @@ function readLibrary() {
 }
 
 // Temp file then rename, the same as a cached cover: a crash mid-write must not
-// be able to leave a half-written library that reads as valid JSON tomorrow.
-function writeLibrary(doc) {
-  const tmp = path.join(MEAL_CARD_DIR, '.library.json.part');
+// be able to leave a half-written document that reads as valid JSON tomorrow.
+function writeJSON(file, doc) {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.part`);
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
-  fs.renameSync(tmp, LIBRARY_FILE);
+  fs.renameSync(tmp, file);
 }
+
+function writeLibrary(doc) {
+  writeJSON(LIBRARY_FILE, doc);
+}
+
+// ---------------------------------------------------------------- the plans
+//
+// One document holds every week, keyed by the Sunday it starts on; a week is a
+// flat map of "YYYY-MM-DD|Meal" to the recipe ids planned in it. A week is ids
+// and dates and nothing else, so the whole history is a few kilobytes and the
+// page can hold all of it — which is what makes stepping between weeks cost no
+// requests, exactly as it did when this lived in localStorage.
+
+const MEAL_SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Other'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_PER_SLOT = 24;
+const MAX_WEEKS_PER_MERGE = 400;
+
+function readPlans() {
+  try {
+    const doc = JSON.parse(fs.readFileSync(PLAN_FILE, 'utf8'));
+    return {
+      version: 1,
+      weeks: doc.weeks && typeof doc.weeks === 'object' ? doc.weeks : {},
+      updatedAt: typeof doc.updatedAt === 'string' ? doc.updatedAt : null,
+    };
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn(`  meal plans unreadable: ${err.message}`);
+    return { version: 1, weeks: {}, updatedAt: null };
+  }
+}
+
+function writePlans(doc) {
+  doc.updatedAt = new Date().toISOString();
+  writeJSON(PLAN_FILE, doc);
+  return doc;
+}
+
+// Local date parts, never toISOString(): a date is a calendar day here, and
+// pushing it through UTC is how a Sunday becomes the Saturday before it.
+function isoDate(dt) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
+function parseDate(raw) {
+  if (!DATE_RE.test(String(raw || ''))) return null;
+  const [y, m, d] = raw.split('-').map(Number);
+  const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
+  // Rejects 2026-02-31, which Date would roll forward into March.
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
+/**
+ * A week is named by the Sunday it starts on. Insisting on that here rather
+ * than rounding a stray date down is deliberate: a browser that disagreed
+ * about where a week begins would file meals in a bucket no other browser
+ * looks in, and silently rounding would hide that instead of showing it.
+ */
+function validWeek(raw) {
+  const dt = parseDate(raw);
+  return dt && dt.getDay() === 0 ? isoDate(dt) : null;
+}
+
+function cleanSlots(week, raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const start = parseDate(week);
+  const days = new Set();
+  for (let i = 0; i < 7; i++) {
+    const dt = new Date(start);
+    dt.setDate(dt.getDate() + i);
+    days.add(isoDate(dt));
+  }
+
+  const slots = {};
+  for (const [key, ids] of Object.entries(raw)) {
+    const [date, meal] = String(key).split('|');
+    // A slot outside the week it is filed under would never be drawn, and would
+    // ride along in the document forever. Drop it rather than store it.
+    if (!days.has(date) || !MEAL_SLOTS.includes(meal) || !Array.isArray(ids)) continue;
+    const clean = ids
+      .map((id) => String(id).trim().slice(0, 60))
+      .filter(Boolean)
+      .slice(0, MAX_PER_SLOT);
+    if (clean.length) slots[`${date}|${meal}`] = clean;
+  }
+  return slots;
+}
+
+const countOf = (list, id) => list.filter((x) => x === id).length;
 
 // ---------------------------------------------------------------- helpers
 
@@ -203,6 +303,77 @@ export function registerMealRoutes(app) {
     res.json({ ok: true, hidden: doc.hidden });
   });
 
+  // ------------------------------------------------------------ week plans
+  //
+  // Every week in one response. It is small — see readPlans — and sending the
+  // lot is what lets the page page back through the year without a request per
+  // week, the way it did when this was localStorage.
+  app.get('/api/meals/plan', (req, res) => res.json(readPlans()));
+
+  // One week, replaced wholesale. Replacing rather than patching keeps the
+  // page's own model of a week as the single description of it, and bounds
+  // what two devices editing at once can cost each other to the week they are
+  // both on rather than the whole year.
+  //
+  // No await between the read and the write, so two requests cannot interleave
+  // and lose one of themselves.
+  app.put('/api/meals/plan/:week', (req, res) => {
+    const week = validWeek(req.params.week);
+    if (!week) {
+      return res.status(400).json({ error: 'A week must be the Sunday it starts on, as YYYY-MM-DD.' });
+    }
+    const slots = cleanSlots(week, req.body?.slots);
+    if (!slots) return res.status(400).json({ error: 'slots must be an object.' });
+
+    const doc = readPlans();
+    // An emptied week is a week with nothing planned in it, which is what an
+    // absent key already means. Keeping it would only grow the document.
+    if (Object.keys(slots).length) doc.weeks[week] = slots;
+    else delete doc.weeks[week];
+    writePlans(doc);
+    res.json({ ok: true, week, slots, updatedAt: doc.updatedAt });
+  });
+
+  // The one-off carry-up of weeks a browser planned before any of this
+  // existed. It only ever adds: nothing is removed, and an id already in a
+  // slot is not doubled — so running it on the laptop and then the iPad ends
+  // with everything both of them had, in either order, rather than whichever
+  // happened to go last.
+  app.post('/api/meals/plan/merge', (req, res) => {
+    const incoming = req.body?.weeks;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      return res.status(400).json({ error: 'weeks must be an object.' });
+    }
+
+    const doc = readPlans();
+    let added = 0;
+    for (const [rawWeek, rawSlots] of Object.entries(incoming).slice(0, MAX_WEEKS_PER_MERGE)) {
+      const week = validWeek(rawWeek);
+      if (!week) continue;
+      const slots = cleanSlots(week, rawSlots);
+      if (!slots || !Object.keys(slots).length) continue;
+
+      const into = doc.weeks[week] || {};
+      for (const [slot, ids] of Object.entries(slots)) {
+        const merged = (into[slot] || []).slice();
+        for (const id of new Set(ids)) {
+          // Union by count rather than by presence. The same card twice in one
+          // slot on one device is two helpings and must survive; the same card
+          // arriving from a second device is the same meal seen twice. Taking
+          // the larger count is both, and re-running changes nothing.
+          for (let n = countOf(merged, id); n < countOf(ids, id); n++) {
+            merged.push(id);
+            added++;
+          }
+        }
+        into[slot] = merged.slice(0, MAX_PER_SLOT);
+      }
+      doc.weeks[week] = into;
+    }
+    writePlans(doc);
+    res.json({ ok: true, added, weeks: doc.weeks, updatedAt: doc.updatedAt });
+  });
+
   app.post('/api/meals/hidden/clear', (req, res) => {
     const doc = readLibrary();
     doc.hidden = [];
@@ -237,5 +408,6 @@ export function mealStats() {
   const files = fs.readdirSync(IMAGE_DIR).filter((f) => !f.startsWith('.'));
   const bytes = files.reduce((n, f) => n + fs.statSync(path.join(IMAGE_DIR, f)).size, 0);
   const doc = readLibrary();
-  return { uploads: files.length, cards: doc.custom.length, hidden: doc.hidden.length, mb: (bytes / 1024 / 1024).toFixed(1) };
+  const weeks = Object.keys(readPlans().weeks).length;
+  return { uploads: files.length, cards: doc.custom.length, hidden: doc.hidden.length, weeks, mb: (bytes / 1024 / 1024).toFixed(1) };
 }

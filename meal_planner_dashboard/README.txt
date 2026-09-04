@@ -4,7 +4,9 @@ Open index.html in Chrome, Safari, Firefox, or Edge.
 
 Features:
 - Drag recipe cards into Breakfast, Lunch, Dinner, or Other for Sunday–Saturday.
-- Plans are saved automatically in your browser for each week.
+- Plans are saved automatically on the server, so a week planned on the laptop
+  is the same week on the iPad. The page re-reads when you come back to it, so
+  a change made elsewhere shows up when you switch to the tab.
 - Navigate between weeks.
 - Click a recipe thumbnail/title to enlarge the full recipe card.
 - Search and filter your recipe library.
@@ -23,7 +25,11 @@ cards open correctly.
 
 Served from the library app it is shared: http://olympus:4173/meals/
 Opened straight off disk, or with the server down, it still works — but then
-cards added, edited or removed stay in that browser alone, and the page says so.
+both the recipe library and the week plans stay in that browser alone, and the
+line beside the week says so.
 
-The week plan itself is still per-browser: what is on the server is the recipe
-library, not the meals you drag onto the days.
+The first time a browser opens the shared version, the weeks it had saved on
+its own are carried up to the server. That merge only ever adds, so doing it on
+the laptop and then on the iPad ends up with everything both of them had rather
+than whichever one happened to be opened last. The old copies are left in the
+browser untouched.

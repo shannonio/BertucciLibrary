@@ -20,3 +20,7 @@ data/logs/
 # tags that go with them. Family data, not source: it belongs in a backup, not
 # in git history.
 data/meal-cards/
+
+# The weeks themselves — who is eating what, when. Same reasoning: family data,
+# belongs in a backup rather than in git history.
+data/meal-plans/

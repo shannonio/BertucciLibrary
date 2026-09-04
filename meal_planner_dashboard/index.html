@@ -44,6 +44,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .planner{padding:16px;overflow:auto}
 .planner-tools{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .planner-tools .spacer{flex:1}.hint{font-size:12px;color:var(--muted)}
+.hint.warn{color:#9a4f31;font-weight:700}
 .week{display:grid;grid-template-columns:repeat(7,minmax(185px,1fr));gap:10px;min-width:1330px}
 .day{background:rgba(255,250,242,.77);border:1px solid var(--line);border-radius:15px;min-height:690px;box-shadow:var(--shadow);overflow:hidden}
 .day-head{padding:12px;border-bottom:1px solid var(--line);background:#f2eadf;display:flex;align-items:baseline;justify-content:space-between}
@@ -132,6 +133,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 <main class="planner">
   <div class="planner-tools">
     <span class="hint">Tip: You can use the same recipe on more than one day.</span>
+    <span class="hint" id="planWhere"></span>
     <span class="spacer"></span>
     <button class="btn" id="clearWeek">Clear This Week</button>
   </div>
@@ -183,9 +185,40 @@ function iso(d){ return d.toISOString().slice(0,10) }
 function parseISO(s){ const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d,12,0,0,0) }
 function datePlus(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x }
 function weekKey(){ return "mealplan:"+iso(currentWeekStart) }
-function loadPlan(){ try{return JSON.parse(localStorage.getItem(weekKey()))||{}}catch{return{}} }
-function savePlan(p){ localStorage.setItem(weekKey(),JSON.stringify(p)) }
 function slotKey(day,meal){return `${day}|${meal}`}
+
+// The weeks live on the server, so a week planned on the laptop is there on the
+// iPad. planDoc holds every week at once — a week is ids and dates and nothing
+// else, so the whole history is a few kilobytes — which is what keeps stepping
+// between weeks instant and request-free, the way it was when this was
+// localStorage. It stays null until we know the server is actually there;
+// opened as a file:// page it falls back to localStorage, unchanged.
+let planDoc = null;
+const plansShared = () => planDoc !== null;
+
+// Callers mutate the object they are handed and pass it back to savePlan, so
+// what they get must not be the cached week itself — a spliced array would
+// otherwise change what is on screen before anything was saved, and stay
+// changed if the save failed.
+function cloneWeek(w){
+  const out={};
+  for(const [k,v] of Object.entries(w||{})) if(Array.isArray(v)&&v.length) out[k]=v.slice();
+  return out;
+}
+
+function loadPlan(){
+  if(plansShared()) return cloneWeek(planDoc.weeks[iso(currentWeekStart)]);
+  try{return JSON.parse(localStorage.getItem(weekKey()))||{}}catch{return{}}
+}
+function savePlan(p){
+  if(plansShared()){
+    const week=iso(currentWeekStart);
+    planDoc.weeks[week]=cloneWeek(p);   // on screen now; on disk in a moment
+    queueWeekSave(week);
+    return;
+  }
+  localStorage.setItem(weekKey(),JSON.stringify(p));
+}
 function recipeById(id){return recipes.find(r=>r.id===id)}
 function isCustom(id){return !builtinRecipes.some(r=>r.id===id)}
 
@@ -221,6 +254,10 @@ function rebuildRecipes(){
 // that already use it keep rendering exactly as they were. That is the whole
 // reason removal is a hidden-list and not a delete.
 function eachSavedWeek(fn){
+  if(plansShared()){
+    for(const [week,plan] of Object.entries(planDoc.weeks)) fn(week,plan);
+    return;
+  }
   for(let i=0;i<localStorage.length;i++){
     const k=localStorage.key(i);
     if(!k||!WEEK_RE.test(k)) continue;
@@ -478,7 +515,13 @@ function attachDropHandlers(){
 prevWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,-7);renderWeek()}
 nextWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,7);renderWeek()}
 todayWeek.onclick=()=>{currentWeekStart=weekStartOf(new Date());renderWeek()}
-clearWeek.onclick=()=>{if(confirm("Clear all meals from this week?")){localStorage.removeItem(weekKey());renderWeek()}}
+clearWeek.onclick=()=>{
+  if(!confirm("Clear all meals from this week?")) return;
+  // An emptied week goes up like any other edit; the server drops a week with
+  // nothing in it rather than storing an empty one.
+  if(plansShared()) savePlan({}); else localStorage.removeItem(weekKey());
+  renderWeek();
+}
 search.addEventListener("input",renderLibrary);
 closeModal.onclick=()=>modal.classList.remove("open");
 modal.onclick=e=>{if(e.target===modal)modal.classList.remove("open")}
@@ -493,6 +536,8 @@ modal.onclick=e=>{if(e.target===modal)modal.classList.remove("open")}
 
 const API = "/api/meals";
 const SHARED_NOTE = "Cards are uploaded to the server, so they appear on every device.";
+const SHARED_PLAN_NOTE = "Saved on the server — this week looks the same on every device.";
+const LOCAL_PLAN_NOTE = "Saved in this browser only.";
 
 function dbOpen(){
   return new Promise((resolve,reject)=>{
@@ -592,6 +637,115 @@ async function pushUpLocalCards(){
   }catch(err){ console.warn("could not carry local cards up to the server",err) }
 }
 
+// ---------------------------------------------------------------- the weeks
+//
+// The week plan used to be localStorage, which made each device its own island
+// in exactly the way uploaded cards once were: a week dragged together on the
+// laptop simply did not exist on the iPad. It is now a document on the server
+// and localStorage is the fallback, not the store.
+
+function setPlanWhere(msg,kind){
+  planWhere.textContent=msg||"";
+  planWhere.className="hint"+(kind?" "+kind:"");
+}
+
+async function fetchPlans(){
+  const res=await fetch(`${API}/plan`,{cache:"no-store"});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const doc=await res.json();
+  return { weeks: doc.weeks&&typeof doc.weeks==="object"?doc.weeks:{}, updatedAt: doc.updatedAt||null };
+}
+
+async function loadPlans(){
+  if(location.protocol==="file:"){ setPlanWhere(LOCAL_PLAN_NOTE); return }
+  try{
+    planDoc=await fetchPlans();
+    setPlanWhere(SHARED_PLAN_NOTE);
+    await pushUpLocalWeeks();
+    renderWeek();
+  }catch(err){
+    console.warn("meal plan server unavailable, using this browser only",err);
+    planDoc=null;
+    setPlanWhere("No server reachable — meals planned here stay in this browser.","warn");
+  }
+}
+
+// Saving is fire-and-forget so a dropped card lands instantly, but never two
+// PUTs for the same week at once: the second could arrive first and the older
+// week would win. One request in flight per week, and whatever the page thinks
+// the week is when that finishes is what goes next.
+const savingWeeks=new Map();
+const queuedWeeks=new Set();
+const failedWeeks=new Set();
+
+function queueWeekSave(week){
+  if(savingWeeks.has(week)){ queuedWeeks.add(week); return }
+  const body=JSON.stringify({slots: planDoc.weeks[week]||{}});
+  const req=fetch(`${API}/plan/${week}`,{method:"PUT",headers:{"Content-Type":"application/json"},body})
+    .then(res=>{
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      failedWeeks.delete(week);
+      if(!failedWeeks.size) setPlanWhere(SHARED_PLAN_NOTE);
+    })
+    .catch(err=>{
+      console.warn("could not save the week",err);
+      failedWeeks.add(week);
+      setPlanWhere("Not saved to the server — this change is on this device only. It will retry.","warn");
+    })
+    .finally(()=>{
+      savingWeeks.delete(week);
+      if(queuedWeeks.delete(week)) queueWeekSave(week);
+    });
+  savingWeeks.set(week,req);
+}
+
+// One-off, per browser. Weeks this device planned before any of this existed
+// are carried up. The server merges rather than replaces, so doing it on the
+// laptop and then on the iPad ends with both their weeks instead of whichever
+// happened to run last, and the localStorage copies are left exactly where
+// they are — this only ever adds.
+async function pushUpLocalWeeks(){
+  if(localStorage.getItem("mealplan:plansUploaded")==="1") return;
+  const weeks={};
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(!k||!WEEK_RE.test(k)) continue;
+    try{
+      const plan=JSON.parse(localStorage.getItem(k))||{};
+      if(Object.keys(plan).length) weeks[k.slice("mealplan:".length)]=plan;
+    }catch{}
+  }
+  if(!Object.keys(weeks).length){ localStorage.setItem("mealplan:plansUploaded","1"); return }
+  try{
+    const res=await fetch(`${API}/plan/merge`,
+      {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({weeks})});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const doc=await res.json();
+    planDoc={weeks:doc.weeks||{},updatedAt:doc.updatedAt||null};
+    localStorage.setItem("mealplan:plansUploaded","1");
+  }catch(err){
+    // Not marked done, so the next load tries again. Merging is additive, so a
+    // half-finished attempt costs nothing to repeat.
+    console.warn("could not carry this browser's weeks up",err);
+  }
+}
+
+// Another device's changes only exist on the server, so the page re-reads when
+// it comes back to the front. Nothing is polled: a planner left open on the
+// counter does not need to be live to the second, and re-reading on return is
+// what makes the iPad show what was planned on the laptop.
+async function refreshPlans(){
+  if(!plansShared()) return;
+  // Anything of ours that has not landed yet goes first — re-reading now would
+  // overwrite it with the server's older copy of the same week.
+  if(failedWeeks.size){ for(const week of [...failedWeeks]) queueWeekSave(week); return }
+  if(savingWeeks.size) return;
+  try{ planDoc=await fetchPlans(); renderWeek(); setPlanWhere(SHARED_PLAN_NOTE) }
+  catch(err){ console.warn("could not re-read the plans",err) }
+}
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) refreshPlans() });
+window.addEventListener("focus",refreshPlans);
+
 // A 1536px card is several megabytes; twenty of them at 90px in the grid is a
 // lot of decoding for an iPad. The browser makes a small version at upload time
 // and sends both, so the grid pulls kilobytes and only the full card costs.
@@ -652,6 +806,6 @@ function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader(
 
 migrateToSundayWeeks();
 rebuildRecipes();
-renderFilters();renderLibrary();renderWeek();loadCustom();
+renderFilters();renderLibrary();renderWeek();loadCustom();loadPlans();
 </script>
 </body></html>
