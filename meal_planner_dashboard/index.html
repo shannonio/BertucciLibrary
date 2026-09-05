@@ -23,7 +23,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .week-label{font-weight:700;min-width:205px;text-align:center}
 .btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 11px;cursor:pointer;color:var(--ink)}
 .btn:hover{background:#f3eee5}.btn.primary{background:var(--sage-dark);color:white;border-color:var(--sage-dark)}
-.layout{display:grid;grid-template-columns:420px minmax(0,1fr);min-height:0}
+.layout{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0}
 .sidebar{border-right:1px solid var(--line);background:#fffaf5;padding:16px;overflow:auto;height:calc(100vh - 78px);position:sticky;top:78px}
 .sidebar h2{font-family:Georgia,serif;margin:0 0 6px;font-size:21px}
 .helper{font-size:12px;color:var(--muted);line-height:1.45;margin-bottom:12px}
@@ -31,12 +31,12 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .filter{font-size:11px;padding:5px 8px;border:1px solid var(--line);background:white;border-radius:999px;cursor:pointer}
 .filter.active{background:#e7ecdf;border-color:#bac5af}
-.recipe-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.recipe-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .recipe{background:white;border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 3px 9px rgba(0,0,0,.04);cursor:grab;position:relative}
 .recipe:active{cursor:grabbing}
 .recipe img{width:100%;height:auto;aspect-ratio:3/2;object-fit:contain;display:block;background:#f2eadf}
 .recipe-body{padding:8px}
-.recipe-title{font-size:12.5px;font-weight:700;line-height:1.25;margin-bottom:5px}
+.recipe-title{font-size:12px;font-weight:700;line-height:1.2;margin-bottom:5px}
 .tags{display:flex;gap:3px;flex-wrap:wrap}.tag{font-size:9px;padding:2px 5px;background:#eef1e9;border-radius:999px;color:#53644d}
 .open-card{position:absolute;right:5px;top:5px;width:26px;height:26px;border-radius:8px;border:0;background:rgba(255,255,255,.92);cursor:pointer;font-size:14px}
 .library-toggle{width:100%;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:0 0 6px;cursor:default;text-align:left;color:inherit}
@@ -81,6 +81,12 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .meal-section{padding:8px;border-bottom:1px dashed #ddd1c2}
 .meal-head{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#7f796f;margin:2px 2px 6px;font-weight:800}
 .dropzone{min-height:88px;border:1px dashed #cec4b5;border-radius:11px;padding:5px;background:rgba(255,255,255,.55);transition:.15s}
+/* A dashed box is an invitation to drop something into it. Once something has
+   been dropped it stops being an invitation and becomes a frame cropping the
+   picture, so it gets out of the way. The border keeps its width and turns
+   transparent rather than going to zero, so the dragover state below can still
+   bring it back on a slot that already has cards in it. */
+.dropzone.filled{border-color:transparent;background:none;padding:0}
 .dropzone.dragover{background:#e8eedf;border-color:#87937b;transform:scale(1.01)}
 .plan-card{background:white;border:1px solid #ded6ca;border-radius:9px;margin:4px 0;padding:6px;display:grid;grid-template-columns:44px 1fr 20px;gap:6px;align-items:center;box-shadow:0 2px 6px rgba(0,0,0,.05)}
 .plan-card img{width:44px;height:38px;object-fit:cover;border-radius:6px}
@@ -141,7 +147,18 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
      rather than a stamp beside it: full width, its own 3:2, the name under it.
      The × lifts onto the image as a round target, since there is no longer a
      column of its own for it to sit in. */
-  .plan-card{display:block;padding:0;margin:7px 0;overflow:hidden;position:relative}
+  /* Edge to edge: with the frame gone there is nothing left to inset the
+     picture from, so the section padding steps aside for a filled slot and the
+     day column's own rounded corners do the clipping instead. An empty slot
+     keeps its inset dashed box — it still has something to invite. */
+  .meal-section{padding:8px 0}
+  .meal-head{padding:0 11px}
+  .dropzone{margin:0 8px}
+  .dropzone.filled{margin:0;border-radius:0}
+  .plan-card{display:block;padding:0;margin:0;overflow:hidden;position:relative;border-radius:0;border-left:0;border-right:0;box-shadow:none}
+  /* Two cards in one meal would otherwise show both their borders as a 2px
+     rule between them. */
+  .plan-card+.plan-card{border-top:0}
   .plan-card img{width:100%;height:auto;aspect-ratio:3/2;object-fit:contain;background:#f2eadf;border-radius:0}
   .plan-card-title{font-size:13.5px;line-height:1.3;padding:9px 44px 9px 11px}
   .remove{position:absolute;top:7px;right:7px;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.93);box-shadow:0 1px 6px rgba(0,0,0,.22);font-size:19px;line-height:1;display:grid;place-items:center}
@@ -149,11 +166,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
   .empty{font-size:12px;padding:16px 3px}
   .add-to-slot{padding:11px}
 
-  /* Two columns, not three: the point is the picture, and at three across on a
-     phone it is a postage stamp. */
-  .recipe-grid{grid-template-columns:1fr 1fr;gap:11px}
-  .recipe-title{font-size:13px}
-  .card-actions button{width:30px;height:30px;font-size:14px}
+  .recipe-grid{grid-template-columns:repeat(3,1fr)}
 
   /* "Drop" is not an instruction you can follow with a finger. */
   .e-drag{display:none}.e-tap{display:inline}
@@ -699,7 +712,7 @@ function renderWeek(){
 function renderSlot(plan,dk,meal){
   const ids=plan[slotKey(dk,meal)]||[];
   return `<div class="meal-section"><div class="meal-head">${meal}</div>
-  <div class="dropzone" data-day="${dk}" data-meal="${meal}">
+  <div class="dropzone${ids.length?" filled":""}" data-day="${dk}" data-meal="${meal}">
     ${ids.length?ids.map((id,index)=>planCard(id,dk,meal,index)).join(""):`<div class="empty"><span class="e-drag">Drop recipe here</span><span class="e-tap">Nothing planned</span></div>`}
   </div>
   <button class="add-to-slot" data-add="${dk}|${meal}">+ Add</button></div>`;
