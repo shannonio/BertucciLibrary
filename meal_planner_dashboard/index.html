@@ -125,6 +125,35 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .sheet-box textarea{resize:vertical;line-height:1.45;font-size:12.5px}
 .sheet-box{max-height:92vh;overflow:auto}
 .sheet-note{font-size:11.5px;color:var(--muted);line-height:1.45;margin:0}
+/* The shopping list on screen. Shut by default — it is a thing you open when
+   you are going out, not a thing that should push the week off the top of a
+   phone every time the page loads. */
+.shop-panel{background:#fffaf5;border:1px solid var(--line);border-radius:13px;margin-bottom:12px;overflow:hidden}
+.shop-toggle{width:100%;display:flex;align-items:center;gap:9px;background:none;border:0;padding:12px 14px;cursor:pointer;text-align:left;color:inherit}
+.shop-title{font-family:Georgia,serif;font-size:17px;font-weight:700;color:var(--sage-dark)}
+.shop-count{font-size:12px;color:var(--muted);font-weight:700}
+.shop-toggle .chev{margin-left:auto;font-size:13px;color:var(--muted);transition:transform .18s}
+.shop-panel.collapsed .shop-toggle .chev{transform:rotate(-90deg)}
+.shop-panel.collapsed .shop-body{display:none}
+.shop-body{border-top:1px solid var(--line);padding:10px 14px 14px}
+.shop-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}
+.shop-progress{font-size:12px;color:var(--muted);font-weight:700}
+.shop-tools .spacer{flex:1}
+
+/* One tap target per line, the whole row. 46px so a thumb in a supermarket
+   hits the row and not the row above it. */
+.shop-list{list-style:none;margin:0;padding:0}
+.shop-row{display:flex;align-items:flex-start;gap:11px;width:100%;background:none;border:0;border-bottom:1px solid #ece4d8;padding:12px 2px;text-align:left;cursor:pointer;color:inherit;min-height:46px;font:inherit}
+.shop-row:last-child{border-bottom:0}
+.shop-row:active{background:#f3eee5}
+.shop-box{flex:0 0 auto;width:21px;height:21px;margin-top:1px;border:1.5px solid #bcb3a4;border-radius:6px;display:grid;place-items:center;font-size:13px;line-height:1;color:#fff;background:#fff}
+.shop-row.done .shop-box{background:var(--sage-dark);border-color:var(--sage-dark)}
+.shop-line{flex:1;min-width:0;font-size:14px;line-height:1.35}
+.shop-for{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.shop-row.done .shop-line{text-decoration:line-through;color:#a9a196}
+.shop-row.done .shop-for{color:#bdb6ab}
+.shop-empty{font-size:13px;color:var(--muted);line-height:1.5;margin:4px 0}
+
 /* Built fresh on every print and only ever seen on paper. */
 .shopping{display:none}
 .shopping h2{font-family:Georgia,serif;font-size:17px;margin:0 0 2px;color:var(--sage-dark)}
@@ -186,7 +215,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
   .planner-tools{margin-bottom:10px}
 }
 @media print{
-  header,.sidebar,.planner-tools,.day-dots,.add-to-slot{display:none!important}
+  header,.sidebar,.planner-tools,.day-dots,.add-to-slot,.shop-panel{display:none!important}
   body,.planner{background:white;padding:0}
   .layout{display:block}.week{display:grid;min-width:0;grid-template-columns:repeat(7,1fr);gap:4px;overflow:visible}
   .day{box-shadow:none;min-height:8.5in;border-radius:5px}
@@ -250,6 +279,14 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
     <span class="spacer"></span>
     <button class="btn" id="clearWeek">Clear This Week</button>
   </div>
+  <section class="shop-panel collapsed" id="shopPanel">
+    <button class="shop-toggle" id="shopToggle" aria-expanded="false" aria-controls="shopBody">
+      <span class="shop-title">Shopping list</span>
+      <span class="shop-count" id="shopCount"></span>
+      <span class="chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="shop-body" id="shopBody"></div>
+  </section>
   <div class="day-dots" id="dayDots"></div>
   <div class="week" id="week"></div>
   <section class="shopping" id="shopping" aria-hidden="true"></section>
@@ -442,6 +479,14 @@ function setLibraryOpen(open,remember){
   libraryToggle.setAttribute("aria-expanded",String(!!open));
   if(remember!==false){ try{ localStorage.setItem("mealplan:libraryOpen",open?"1":"0") }catch{} }
 }
+function initShopOpen(){
+  let saved=null;
+  try{ saved=localStorage.getItem("mealplan:shopOpen") }catch{}
+  const open=saved==="1";
+  shopPanel.classList.toggle("collapsed",!open);
+  shopToggle.setAttribute("aria-expanded",String(open));
+}
+
 function initLibraryOpen(){
   let saved=null;
   try{ saved=localStorage.getItem("mealplan:libraryOpen") }catch{}
@@ -750,6 +795,7 @@ function renderWeek(){
   }).join("");
   attachDropHandlers();
   renderDots();
+  renderShopping();
   // The list was just rebuilt, so the scroll position went with it. Put it
   // back without an animation: a drop or a delete must not look like a swipe.
   scrollToDay(currentDay,false);
@@ -913,14 +959,116 @@ function buildShoppingList(){
   }
 }
 
+// ------------------------------------------------------- the list on screen
+//
+// Same weekShopping() the printed sheet is built from, so the paper and the
+// phone can never disagree. What is ticked lives on the server beside the plan:
+// one person shops while the other is at home, and the list should empty out on
+// both. The tick is the ingredient line itself, not its position — a meal added
+// while somebody is mid-aisle would renumber every position under them.
+
+let checkedWeek = new Set();
+
+function shoppingKey(line){ return line.replace(/\s+/g," ").trim().toLowerCase() }
+
+function renderShopping(){
+  const {items,missing}=weekShopping();
+  const done=items.filter(i=>checkedWeek.has(shoppingKey(i.line))).length;
+
+  shopCount.textContent = items.length
+    ? (done ? `${done} of ${items.length}` : `${items.length} item${items.length===1?"":"s"}`)
+    : "nothing planned";
+
+  shopBody.textContent="";
+  if(!items.length){
+    shopBody.appendChild(el("p","shop-empty",
+      missing.length
+        ? "Nothing to shop for yet — the meals planned this week have no ingredients recorded. Add them with the pencil button on the card."
+        : "Nothing planned this week, so there is nothing to buy."));
+    return;
+  }
+
+  const tools=el("div","shop-tools");
+  tools.appendChild(el("span","shop-progress",`${done} of ${items.length} ticked`));
+  tools.appendChild(el("span","spacer"));
+  if(done){
+    const clear=el("button","linkish","Clear ticks");
+    clear.onclick=()=>{ checkedWeek=new Set(); queueCheckedSave(); renderShopping() };
+    tools.appendChild(clear);
+  }
+  shopBody.appendChild(tools);
+
+  const list=el("ul","shop-list");
+  for(const it of items){
+    const key=shoppingKey(it.line), on=checkedWeek.has(key);
+    const li=document.createElement("li");
+    const row=el("button","shop-row"+(on?" done":""));
+    row.type="button";
+    row.setAttribute("aria-pressed",String(on));
+    const box=el("span","shop-box",on?"✓":"");
+    const text=el("span","shop-line",it.line);
+    const from=[...it.from.entries()].map(([t,n])=>n>1?`${t} ×${n}`:t).join(", ");
+    text.appendChild(el("span","shop-for",from));
+    row.append(box,text);
+    // The whole row toggles — a 21px checkbox is not a target in a supermarket.
+    row.onclick=()=>{
+      if(checkedWeek.has(key)) checkedWeek.delete(key); else checkedWeek.add(key);
+      queueCheckedSave();
+      renderShopping();
+    };
+    li.appendChild(row);
+    list.appendChild(li);
+  }
+  shopBody.appendChild(list);
+
+  if(missing.length){
+    shopBody.appendChild(el("p","shop-empty",
+      "No ingredients recorded for: "+missing.join(", ")+" — so nothing from them is on this list."));
+  }
+}
+
+// Ticks go up the same way a week does: one request in flight, the latest
+// state wins, and a failure is not allowed to lose the tick on screen.
+let savingChecked=false, checkedQueued=false;
+function queueCheckedSave(){
+  if(!plansShared()) return;
+  if(savingChecked){ checkedQueued=true; return }
+  savingChecked=true;
+  const week=iso(currentWeekStart);
+  fetch(`${API}/plan/${week}/checked`,
+    {method:"PUT",headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({checked:[...checkedWeek]})})
+    .then(res=>{ if(!res.ok) throw new Error("HTTP "+res.status) })
+    .catch(err=>console.warn("could not save the ticks",err))
+    .finally(()=>{
+      savingChecked=false;
+      if(checkedQueued){ checkedQueued=false; queueCheckedSave() }
+    });
+}
+
+// The ticks belong to a week, so stepping to another one loads that week's.
+function loadCheckedForWeek(){
+  const week=iso(currentWeekStart);
+  const from=(plansShared() && planDoc.checked && planDoc.checked[week]) || [];
+  checkedWeek=new Set(from.map(shoppingKey));
+}
+
+shopToggle.onclick=()=>{
+  const open=shopPanel.classList.contains("collapsed");
+  shopPanel.classList.toggle("collapsed",!open);
+  shopToggle.setAttribute("aria-expanded",String(open));
+  try{ localStorage.setItem("mealplan:shopOpen",open?"1":"0") }catch{}
+};
+
 printWeek.onclick=()=>{ buildShoppingList(); window.print() };
 // Cmd-P bypasses the button, so build on the print itself as well. Doing it
 // twice costs nothing — it is rebuilt from scratch either way.
 window.addEventListener("beforeprint",buildShoppingList);
 
-prevWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,-7);focusDayOfWeek();renderWeek()}
-nextWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,7);focusDayOfWeek();renderWeek()}
-todayWeek.onclick=()=>{currentWeekStart=weekStartOf(new Date());focusDayOfWeek();renderWeek()}
+function goWeek(d){ currentWeekStart=d; focusDayOfWeek(); loadCheckedForWeek(); renderWeek() }
+prevWeek.onclick=()=>goWeek(datePlus(currentWeekStart,-7));
+nextWeek.onclick=()=>goWeek(datePlus(currentWeekStart,7));
+todayWeek.onclick=()=>goWeek(weekStartOf(new Date()));
 clearWeek.onclick=()=>{
   if(!confirm("Clear all meals from this week?")) return;
   // An emptied week goes up like any other edit; the server drops a week with
@@ -1059,7 +1207,11 @@ async function fetchPlans(){
   const res=await fetch(`${API}/plan`,{cache:"no-store"});
   if(!res.ok) throw new Error("HTTP "+res.status);
   const doc=await res.json();
-  return { weeks: doc.weeks&&typeof doc.weeks==="object"?doc.weeks:{}, updatedAt: doc.updatedAt||null };
+  return {
+    weeks: doc.weeks&&typeof doc.weeks==="object"?doc.weeks:{},
+    checked: doc.checked&&typeof doc.checked==="object"?doc.checked:{},
+    updatedAt: doc.updatedAt||null,
+  };
 }
 
 async function loadPlans(){
@@ -1068,6 +1220,7 @@ async function loadPlans(){
     planDoc=await fetchPlans();
     setPlanWhere(SHARED_PLAN_NOTE);
     await pushUpLocalWeeks();
+    loadCheckedForWeek();
     renderWeek();
   }catch(err){
     console.warn("meal plan server unavailable, using this browser only",err);
@@ -1127,7 +1280,7 @@ async function pushUpLocalWeeks(){
       {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({weeks})});
     if(!res.ok) throw new Error("HTTP "+res.status);
     const doc=await res.json();
-    planDoc={weeks:doc.weeks||{},updatedAt:doc.updatedAt||null};
+    planDoc={weeks:doc.weeks||{},checked:planDoc.checked||{},updatedAt:doc.updatedAt||null};
     localStorage.setItem("mealplan:plansUploaded","1");
   }catch(err){
     // Not marked done, so the next load tries again. Merging is additive, so a
@@ -1146,8 +1299,12 @@ async function refreshPlans(){
   // overwrite it with the server's older copy of the same week.
   if(failedWeeks.size){ for(const week of [...failedWeeks]) queueWeekSave(week); return }
   if(savingWeeks.size) return;
-  try{ planDoc=await fetchPlans(); renderWeek(); setPlanWhere(SHARED_PLAN_NOTE) }
-  catch(err){ console.warn("could not re-read the plans",err) }
+  try{
+    planDoc=await fetchPlans();
+    loadCheckedForWeek();     // somebody else may have been ticking things off
+    renderWeek();
+    setPlanWhere(SHARED_PLAN_NOTE);
+  }catch(err){ console.warn("could not re-read the plans",err) }
 }
 document.addEventListener("visibilitychange",()=>{ if(!document.hidden) refreshPlans() });
 window.addEventListener("focus",refreshPlans);
@@ -1226,6 +1383,7 @@ function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader(
 
 migrateToSundayWeeks();
 initLibraryOpen();
+initShopOpen();
 rebuildRecipes();
 renderFilters();renderLibrary();renderWeek();loadCustom();loadPlans();
 </script>

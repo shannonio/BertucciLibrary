@@ -112,11 +112,16 @@ function readPlans() {
     return {
       version: 1,
       weeks: doc.weeks && typeof doc.weeks === 'object' ? doc.weeks : {},
+      // What has been ticked off the shopping list, per week. It lives beside
+      // the plan rather than in the browser for the same reason the plan does:
+      // the list is read in a shop, on a phone, by whoever is standing in the
+      // aisle — and the other person at home should see it empty out.
+      checked: doc.checked && typeof doc.checked === 'object' ? doc.checked : {},
       updatedAt: typeof doc.updatedAt === 'string' ? doc.updatedAt : null,
     };
   } catch (err) {
     if (err.code !== 'ENOENT') console.warn(`  meal plans unreadable: ${err.message}`);
-    return { version: 1, weeks: {}, updatedAt: null };
+    return { version: 1, weeks: {}, checked: {}, updatedAt: null };
   }
 }
 
@@ -402,10 +407,43 @@ export function registerMealRoutes(app) {
     const doc = readPlans();
     // An emptied week is a week with nothing planned in it, which is what an
     // absent key already means. Keeping it would only grow the document.
-    if (Object.keys(slots).length) doc.weeks[week] = slots;
-    else delete doc.weeks[week];
+    if (Object.keys(slots).length) {
+      doc.weeks[week] = slots;
+    } else {
+      // A week with nothing planned has nothing to shop for either.
+      delete doc.weeks[week];
+      delete doc.checked[week];
+    }
     writePlans(doc);
     res.json({ ok: true, week, slots, updatedAt: doc.updatedAt });
+  });
+
+  // What has been ticked off this week's shopping list, replaced wholesale.
+  // The ticks are the ingredient lines themselves rather than indices into the
+  // list: the list is derived from the plan, so a meal added mid-shop would
+  // renumber every index under whoever is holding the phone. A line that is no
+  // longer needed simply stops matching anything, which is also how the set
+  // prunes itself.
+  app.put('/api/meals/plan/:week/checked', (req, res) => {
+    const week = validWeek(req.params.week);
+    if (!week) {
+      return res.status(400).json({ error: 'A week must be the Sunday it starts on, as YYYY-MM-DD.' });
+    }
+    const raw = req.body?.checked;
+    if (!Array.isArray(raw)) return res.status(400).json({ error: 'checked must be an array.' });
+
+    const checked = [
+      ...new Set(
+        raw.map((line) => String(line).replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 200))
+           .filter(Boolean)
+      ),
+    ].slice(0, 400);
+
+    const doc = readPlans();
+    if (checked.length) doc.checked[week] = checked;
+    else delete doc.checked[week];
+    writePlans(doc);
+    res.json({ ok: true, week, checked, updatedAt: doc.updatedAt });
   });
 
   // The one-off carry-up of weeks a browser planned before any of this
@@ -483,5 +521,6 @@ export function mealStats() {
   const bytes = files.reduce((n, f) => n + fs.statSync(path.join(IMAGE_DIR, f)).size, 0);
   const doc = readLibrary();
   const weeks = Object.keys(readPlans().weeks).length;
+  // (checked sets are per-week and not worth counting separately here)
   return { uploads: files.length, cards: doc.custom.length, hidden: doc.hidden.length, weeks, mb: (bytes / 1024 / 1024).toFixed(1) };
 }
