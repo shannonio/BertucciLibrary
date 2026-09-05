@@ -193,6 +193,19 @@ function cleanTitle(raw) {
   return String(raw || '').trim().slice(0, 160);
 }
 
+// Ingredients are lines, not a blob: the shopping list needs to count them and
+// tick them off one at a time. Stored as typed — "2 cups all-purpose flour" —
+// because a card's own wording is the thing a person recognises in the aisle,
+// and any attempt to parse a quantity out of it would be wrong often enough to
+// be worse than useless.
+function cleanIngredients(raw) {
+  const list = Array.isArray(raw) ? raw : String(raw || '').split('\n');
+  return list
+    .map((line) => String(line).replace(/\s+/g, ' ').trim().slice(0, 200))
+    .filter(Boolean)
+    .slice(0, 80);
+}
+
 /** Our own filename, always — a client-supplied one is not to be trusted. */
 function storeImage(file, suffix) {
   const type = (file.mimetype || '').toLowerCase();
@@ -250,6 +263,7 @@ export function registerMealRoutes(app) {
         title,
         category: cleanCategory(req.body.category),
         tags: cleanTags(req.body.tags),
+        ingredients: cleanIngredients(req.body.ingredients),
         image: imageUrl,
         thumb: thumbUrl || imageUrl,
         addedAt: new Date().toISOString(),
@@ -277,6 +291,7 @@ export function registerMealRoutes(app) {
       title: cleanTitle(req.body.title),
       category: cleanCategory(req.body.category),
       tags: cleanTags(req.body.tags),
+      ingredients: cleanIngredients(req.body.ingredients),
     };
     if (!patch.title) return res.status(400).json({ error: 'A recipe name is required.' });
 
