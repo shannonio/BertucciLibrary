@@ -26,9 +26,11 @@ import crypto from 'crypto';
 import multer from 'multer';
 import express from 'express';
 import { fileURLToPath } from 'url';
+import { readIngredients, readIngredientsFromFile, mediaTypeFor } from './mealIngredients.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIR = path.join(here, '..', 'meal_planner_dashboard');
+const ASSET_DIR = path.join(DASHBOARD_DIR, 'assets');
 export const MEAL_CARD_DIR = path.join(here, '..', 'data', 'meal-cards');
 // The images sit in their own subdirectory because that whole subdirectory is
 // served over HTTP. library.json holds the titles and tags and must not be
@@ -269,6 +271,25 @@ export function registerMealRoutes(app) {
         addedAt: new Date().toISOString(),
       };
 
+      // Read the ingredients off the card being uploaded, unless the caller
+      // sent their own. Best-effort throughout: the card is what the person
+      // asked to save, and no failure here is allowed to lose it. What went
+      // wrong comes back beside the card so the page can say so.
+      let ingredientsError = null;
+      if (!card.ingredients.length) {
+        try {
+          const mediaType = mediaTypeFor(imageUrl);
+          if (!mediaType) throw new Error('That image type cannot be read for ingredients.');
+          card.ingredients = await readIngredients({
+            base64: image.buffer.toString('base64'),
+            mediaType,
+          });
+        } catch (err) {
+          console.warn(`  could not read ingredients from ${card.title}: ${err.message}`);
+          ingredientsError = err.message;
+        }
+      }
+
       const doc = readLibrary();
       // An id that already exists means a re-sent migration, not a new card.
       if (doc.custom.some((c) => c.id === card.id)) {
@@ -276,7 +297,7 @@ export function registerMealRoutes(app) {
       }
       doc.custom.push(card);
       writeLibrary(doc);
-      res.json({ card });
+      res.json({ card, ingredientsError });
     })
   );
 
@@ -317,6 +338,44 @@ export function registerMealRoutes(app) {
     writeLibrary(doc);
     res.json({ ok: true, hidden: doc.hidden });
   });
+
+  // Read (or re-read) the ingredients off a card already in the library. The
+  // upload path does this once; this is how the cards that predate it get
+  // theirs, and how a card whose reading came out wrong gets another go.
+  //
+  // A custom card owns its record so the lines are written into it; a built-in
+  // card is a const in the page, so they are stored as an override — exactly
+  // the split the title and tags already use.
+  app.post('/api/meals/cards/:id/ingredients', wrap(async (req, res) => {
+    const id = req.params.id;
+    const doc = readLibrary();
+    const existing = doc.custom.find((c) => c.id === id);
+
+    // Only ever a path this server built: a custom card's stored upload, or a
+    // built-in asset resolved by basename. The id never becomes a path.
+    let file;
+    if (existing) {
+      file = path.join(IMAGE_DIR, path.basename(existing.image || ''));
+    } else {
+      const asset = String(req.body?.image || '').replace(/^assets\//, '');
+      const resolved = path.join(ASSET_DIR, path.basename(asset));
+      if (!asset || !fs.existsSync(resolved)) {
+        return res.status(404).json({ error: 'No card image to read.' });
+      }
+      file = resolved;
+    }
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'No card image to read.' });
+
+    const ingredients = cleanIngredients(await readIngredientsFromFile(file));
+    if (!ingredients.length) {
+      return res.status(422).json({ error: 'Nothing readable as an ingredient list on that card.' });
+    }
+
+    if (existing) existing.ingredients = ingredients;
+    else doc.overrides[id] = { ...(doc.overrides[id] || {}), ingredients };
+    writeLibrary(doc);
+    res.json({ ok: true, id, ingredients });
+  }));
 
   // ------------------------------------------------------------ week plans
   //
