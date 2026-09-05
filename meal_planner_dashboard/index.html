@@ -78,20 +78,28 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .day{background:rgba(255,250,242,.77);border:1px solid var(--line);border-radius:15px;min-height:690px;box-shadow:var(--shadow);overflow:hidden}
 .day-head{padding:12px;border-bottom:1px solid var(--line);background:#f2eadf;display:flex;align-items:baseline;justify-content:space-between}
 .day-name{font-family:Georgia,serif;font-weight:700;font-size:17px}.day-date{font-size:11px;color:var(--muted)}
-.meal-section{padding:8px;border-bottom:1px dashed #ddd1c2}
-.meal-head{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#7f796f;margin:2px 2px 6px;font-weight:800}
-.dropzone{min-height:88px;border:1px dashed #cec4b5;border-radius:11px;padding:5px;background:rgba(255,255,255,.55);transition:.15s}
+.meal-section{padding:8px 0;border-bottom:1px dashed #ddd1c2}
+.meal-head{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#7f796f;margin:2px 2px 6px;padding:0 10px;font-weight:800}
+/* The side inset lives on the dropzone, not the section, so a filled slot can
+   drop it and run the full width of the day. */
+.dropzone{min-height:88px;margin:0 8px;border:1px dashed #cec4b5;border-radius:11px;padding:5px;background:rgba(255,255,255,.55);transition:.15s}
 /* A dashed box is an invitation to drop something into it. Once something has
    been dropped it stops being an invitation and becomes a frame cropping the
    picture, so it gets out of the way. The border keeps its width and turns
    transparent rather than going to zero, so the dragover state below can still
    bring it back on a slot that already has cards in it. */
-.dropzone.filled{border-color:transparent;background:none;padding:0}
+.dropzone.filled{border-color:transparent;background:none;padding:0;margin:0;border-radius:0}
 .dropzone.dragover{background:#e8eedf;border-color:#87937b;transform:scale(1.01)}
-.plan-card{background:white;border:1px solid #ded6ca;border-radius:9px;margin:4px 0;padding:6px;display:grid;grid-template-columns:44px 1fr 20px;gap:6px;align-items:center;box-shadow:0 2px 6px rgba(0,0,0,.05)}
-.plan-card img{width:44px;height:38px;object-fit:cover;border-radius:6px}
-.plan-card-title{font-size:10.5px;font-weight:700;line-height:1.15}
-.remove{border:0;background:transparent;color:#9a7566;cursor:pointer;font-size:16px;padding:0}
+/* A planned meal is the recipe card itself: the picture at the full width of
+   the day column, its own 3:2, the name underneath. contain rather than cover
+   because these are documents — a crop takes the recipe off the card. */
+.plan-card{background:white;border:1px solid #ded6ca;border-left:0;border-right:0;border-radius:0;margin:0;padding:0;display:block;overflow:hidden;position:relative}
+/* Two cards in one meal would otherwise show both their edges as a 2px rule. */
+.plan-card+.plan-card{border-top:0}
+.plan-card img{width:100%;height:auto;aspect-ratio:3/2;object-fit:contain;background:#f2eadf;border-radius:0;display:block}
+.plan-card-title{font-size:11.5px;font-weight:700;line-height:1.25;padding:7px 34px 7px 10px}
+/* No column of its own to sit in any more, so it lifts onto the picture. */
+.remove{position:absolute;top:6px;right:6px;width:28px;height:28px;border-radius:50%;border:0;padding:0;background:rgba(255,255,255,.93);box-shadow:0 1px 6px rgba(0,0,0,.22);color:#9a7566;cursor:pointer;font-size:16px;line-height:1;display:grid;place-items:center}
 .empty{font-size:10px;color:#aaa;text-align:center;padding:22px 3px;pointer-events:none}
 .e-tap{display:none}
 .modal{position:fixed;inset:0;background:rgba(20,25,20,.7);z-index:30;display:none;align-items:center;justify-content:center;padding:28px}
@@ -147,22 +155,12 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
      rather than a stamp beside it: full width, its own 3:2, the name under it.
      The × lifts onto the image as a round target, since there is no longer a
      column of its own for it to sit in. */
-  /* Edge to edge: with the frame gone there is nothing left to inset the
-     picture from, so the section padding steps aside for a filled slot and the
-     day column's own rounded corners do the clipping instead. An empty slot
-     keeps its inset dashed box — it still has something to invite. */
-  .meal-section{padding:8px 0}
-  .meal-head{padding:0 11px}
-  .dropzone{margin:0 8px}
-  .dropzone.filled{margin:0;border-radius:0}
-  .plan-card{display:block;padding:0;margin:0;overflow:hidden;position:relative;border-radius:0;border-left:0;border-right:0;box-shadow:none}
-  /* Two cards in one meal would otherwise show both their borders as a 2px
-     rule between them. */
-  .plan-card+.plan-card{border-top:0}
-  .plan-card img{width:100%;height:auto;aspect-ratio:3/2;object-fit:contain;background:#f2eadf;border-radius:0}
+  /* A whole phone width to spend rather than a seventh of a screen, so the
+     name and the × can both grow to what a finger expects. The full-bleed card
+     itself is the base style now — it is the same everywhere. */
   .plan-card-title{font-size:13.5px;line-height:1.3;padding:9px 44px 9px 11px}
-  .remove{position:absolute;top:7px;right:7px;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.93);box-shadow:0 1px 6px rgba(0,0,0,.22);font-size:19px;line-height:1;display:grid;place-items:center}
-  .meal-head{font-size:11px}
+  .remove{top:7px;right:7px;width:34px;height:34px;font-size:19px}
+  .meal-head{font-size:11px;padding:0 11px}
   .empty{font-size:12px;padding:16px 3px}
   .add-to-slot{padding:11px}
 
@@ -181,8 +179,9 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
   .layout{display:block}.week{display:grid;min-width:0;grid-template-columns:repeat(7,1fr);gap:4px;overflow:visible}
   .day{box-shadow:none;min-height:8.5in;border-radius:5px}
   .day-head{padding:6px}.day-name{font-size:12px}
-  .meal-section{padding:4px}.dropzone{min-height:90px}
-  .plan-card{grid-template-columns:1fr;padding:4px}.plan-card img,.remove{display:none}.plan-card-title{font-size:8px}
+  .meal-section{padding:4px}.dropzone{min-height:90px;margin:0}
+  .plan-card{padding:2px 0;border:0}.plan-card img,.remove{display:none}
+  .plan-card-title{font-size:8px;padding:1px 2px}
   @page{size:landscape;margin:.25in}
 }
 </style>
