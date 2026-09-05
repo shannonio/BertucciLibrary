@@ -39,6 +39,35 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .recipe-title{font-size:12px;font-weight:700;line-height:1.2;margin-bottom:5px}
 .tags{display:flex;gap:3px;flex-wrap:wrap}.tag{font-size:9px;padding:2px 5px;background:#eef1e9;border-radius:999px;color:#53644d}
 .open-card{position:absolute;right:5px;top:5px;width:26px;height:26px;border-radius:8px;border:0;background:rgba(255,255,255,.92);cursor:pointer;font-size:14px}
+.library-toggle{width:100%;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:0 0 6px;cursor:default;text-align:left;color:inherit}
+.library-toggle h2{margin:0}
+.library-count{font-size:11.5px;color:var(--muted);font-weight:700}
+.library-toggle .chev{display:none;margin-left:auto;font-size:13px;color:var(--muted);transition:transform .18s}
+.sidebar.collapsed .library-toggle .chev{transform:rotate(-90deg)}
+
+/* Picking a recipe by tapping it. Dragging is a mouse gesture — on a phone
+   dragstart never fires — so on a small screen this is the only way a meal
+   gets onto a day at all. It is wired up everywhere, not just on mobile: it
+   costs nothing on the desktop, where the cards stay draggable as well. */
+.pick-banner{display:flex;align-items:center;gap:8px;background:#e7ecdf;border:1px solid #bac5af;border-radius:11px;padding:8px 10px;margin-bottom:10px;font-size:12px;font-weight:700;color:var(--sage-dark);line-height:1.3}
+.pick-banner[hidden]{display:none}
+.pick-banner .spacer{flex:1}
+.recipe.pickable{cursor:pointer}
+.recipe.pickable:active{transform:scale(.97)}
+.add-to-slot{display:none;width:100%;margin-top:5px;border:1px dashed #cec4b5;background:rgba(255,255,255,.6);border-radius:9px;padding:8px;font-size:12px;font-weight:700;color:var(--sage-dark);cursor:pointer}
+.add-to-slot:active{background:#e8eedf}
+
+/* The day strip above the carousel: which day you are on, which days already
+   have something in them, and a way to jump without swiping seven times. */
+.day-dots{display:none;gap:5px;margin-bottom:10px}
+.day-dot{flex:1;min-width:0;border:1px solid var(--line);background:#fff;border-radius:9px;padding:5px 0 4px;cursor:pointer;display:grid;gap:1px;line-height:1.1;color:var(--muted)}
+.day-dot .dd-n{font-size:9px;font-weight:800;letter-spacing:.05em}
+.day-dot .dd-d{font-size:12px;font-weight:700}
+.day-dot.on{background:var(--sage-dark);border-color:var(--sage-dark);color:#fff}
+.day-dot .dd-mark{width:4px;height:4px;border-radius:50%;background:transparent;margin:1px auto 0}
+.day-dot.has .dd-mark{background:var(--terracotta)}
+.day-dot.on.has .dd-mark{background:#fff}
+
 .upload{margin-top:14px;border:1px dashed #b8b0a4;border-radius:12px;padding:11px;background:#fff;display:grid;gap:7px}
 .upload label{font-weight:700;font-size:12px}.upload input[type=file]{font-size:11px;width:100%}
 .planner{padding:16px;overflow:auto}
@@ -58,6 +87,7 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .plan-card-title{font-size:10.5px;font-weight:700;line-height:1.15}
 .remove{border:0;background:transparent;color:#9a7566;cursor:pointer;font-size:16px;padding:0}
 .empty{font-size:10px;color:#aaa;text-align:center;padding:22px 3px;pointer-events:none}
+.e-tap{display:none}
 .modal{position:fixed;inset:0;background:rgba(20,25,20,.7);z-index:30;display:none;align-items:center;justify-content:center;padding:28px}
 .modal.open{display:flex}.modal-box{position:relative;max-width:95vw;max-height:95vh;background:white;border-radius:14px;padding:8px;box-shadow:0 20px 60px #0008}
 .modal img{display:block;max-width:90vw;max-height:88vh;object-fit:contain}
@@ -83,11 +113,53 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .sheet-actions .spacer{flex:1}
 .btn.danger{border-color:#d8b3a4;color:#9a4f31;background:#fff}
 .btn.danger:hover{background:#f7e9e2}
-@media(max-width:900px){.layout{grid-template-columns:1fr}.sidebar{position:relative;top:0;height:auto;border-right:0;border-bottom:1px solid var(--line)}.recipe-grid{grid-template-columns:repeat(3,1fr)}header{position:relative}.week{grid-template-columns:repeat(7,180px)}}
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  header{position:relative;padding:12px 16px}
+  .brand p{display:none}
+  .week-label{min-width:0;flex:1}
+  .sidebar{position:relative;top:0;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:12px 16px;overflow:visible}
+  .recipe-grid{grid-template-columns:repeat(3,1fr)}
+
+  /* The library is a disclosure here, shut by default, so the days are the
+     first thing on the screen instead of two hundred pixels of thumbnails. */
+  .library-toggle{cursor:pointer;padding:2px 0}
+  .library-toggle .chev{display:block}
+  .sidebar.collapsed .library-body{display:none}
+
+  /* One day per screen, swiped through, rather than a 1330px week that has to
+     be dragged sideways to be read at all. Every day is still in the DOM —
+     this is a scroll container, not a rebuild — so nothing else has to know. */
+  .planner{padding:12px}
+  .week{display:flex;min-width:0;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scroll-behavior:smooth;scrollbar-width:none}
+  .week::-webkit-scrollbar{display:none}
+  .day{flex:0 0 100%;scroll-snap-align:center;min-height:0;border-radius:13px}
+  .dropzone{min-height:64px}
+  .day-dots{display:flex}
+  .add-to-slot{display:block}
+
+  /* A whole column's width to spend, and a finger to hit it with: the card
+     that was sized for a seventh of a desktop screen can be read properly,
+     and the × becomes a target rather than a dot. */
+  .plan-card{grid-template-columns:58px 1fr 40px;padding:8px;margin:6px 0}
+  .plan-card img{width:58px;height:48px}
+  .plan-card-title{font-size:13px;line-height:1.25}
+  .remove{font-size:22px;height:40px;line-height:1}
+  .meal-head{font-size:11px}
+  .empty{font-size:12px;padding:16px 3px}
+  .add-to-slot{padding:11px}
+
+  /* "Drop" is not an instruction you can follow with a finger. */
+  .e-drag{display:none}.e-tap{display:inline}
+  /* Nobody prints from a phone, and dropping it puts the week nav on one row.
+     The tip is about dragging, which is not how a meal gets added here. */
+  .print-week,.tip-drag{display:none}
+  .planner-tools{margin-bottom:10px}
+}
 @media print{
   header,.sidebar,.planner-tools{display:none!important}
   body,.planner{background:white;padding:0}
-  .layout{display:block}.week{min-width:0;grid-template-columns:repeat(7,1fr);gap:4px}
+  .layout{display:block}.week{display:grid;min-width:0;grid-template-columns:repeat(7,1fr);gap:4px;overflow:visible}
   .day{box-shadow:none;min-height:8.5in;border-radius:5px}
   .day-head{padding:6px}.day-name{font-size:12px}
   .meal-section{padding:4px}.dropzone{min-height:90px}
@@ -106,13 +178,19 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
     <div class="week-label" id="weekLabel"></div>
     <button class="btn" id="nextWeek">→</button>
   </div>
-  <button class="btn" onclick="window.print()">Print Week</button>
+  <button class="btn print-week" onclick="window.print()">Print Week</button>
 </div></header>
 
 <div class="layout">
-<aside class="sidebar">
-  <h2>Recipe Library</h2>
-  <div class="helper">Drag a card onto Breakfast, Lunch, Dinner, or Other. Click the ↗ button to view the full recipe card.</div>
+<aside class="sidebar" id="sidebar">
+  <button class="library-toggle" id="libraryToggle" aria-expanded="true" aria-controls="libraryBody">
+    <h2>Recipe Library</h2>
+    <span class="library-count" id="libraryCount"></span>
+    <span class="chev" aria-hidden="true">▾</span>
+  </button>
+  <div class="library-body" id="libraryBody">
+  <div class="pick-banner" id="pickBanner" hidden></div>
+  <div class="helper">Drag a card onto Breakfast, Lunch, Dinner, or Other — or tap <b>+ Add</b> on a meal and then tap a card. Click the ↗ button to view the full recipe card.</div>
   <input id="search" class="search" placeholder="Search recipes…">
   <div class="filters" id="filters"></div>
   <div class="recipe-grid" id="recipeGrid"></div>
@@ -128,15 +206,17 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
     <div class="helper" style="margin:0" id="uploadWhere">Cards are uploaded to the server, so they appear on every device.</div>
   </div>
   <div class="restore-line" id="restoreLine" hidden></div>
+  </div>
 </aside>
 
 <main class="planner">
   <div class="planner-tools">
-    <span class="hint">Tip: You can use the same recipe on more than one day.</span>
+    <span class="hint tip-drag">Tip: You can use the same recipe on more than one day.</span>
     <span class="hint" id="planWhere"></span>
     <span class="spacer"></span>
     <button class="btn" id="clearWeek">Clear This Week</button>
   </div>
+  <div class="day-dots" id="dayDots"></div>
   <div class="week" id="week"></div>
 </main>
 </div>
@@ -168,6 +248,13 @@ let currentWeekStart = weekStartOf(new Date());
 let activeFilter = "All";
 let dragPayload = null;
 let editingId = null;
+// The slot waiting for a card, when one is being chosen by tapping.
+let pendingSlot = null;
+// Which day the mobile carousel is showing. Kept across re-renders, or every
+// drop would fling the page back to Sunday.
+let currentDay = new Date().getDay();
+
+const isMobile = () => window.matchMedia("(max-width:900px)").matches;
 
 const WEEK_RE = /^mealplan:\d{4}-\d{2}-\d{2}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -309,6 +396,68 @@ function migrateToSundayWeeks(){
   localStorage.setItem("mealplan:weekStart","sunday");
 }
 
+// Shut by default on a phone so the week is the first thing on screen, open by
+// default where there is room for a column. Remembered per device afterwards,
+// which is the kind of thing localStorage is still right for.
+function setLibraryOpen(open,remember){
+  sidebar.classList.toggle("collapsed",!open);
+  libraryToggle.setAttribute("aria-expanded",String(!!open));
+  if(remember!==false){ try{ localStorage.setItem("mealplan:libraryOpen",open?"1":"0") }catch{} }
+}
+function initLibraryOpen(){
+  let saved=null;
+  try{ saved=localStorage.getItem("mealplan:libraryOpen") }catch{}
+  setLibraryOpen(saved===null ? !isMobile() : saved==="1", false);
+}
+libraryToggle.onclick=()=>{
+  // Backing out of the library is also backing out of choosing a card for a
+  // slot; leaving the banner up over a shut list would be a dead end.
+  if(!sidebar.classList.contains("collapsed") && pendingSlot) cancelPick();
+  setLibraryOpen(sidebar.classList.contains("collapsed"));
+};
+
+// --------------------------------------------------------- tapping a card in
+//
+// Dragging is a mouse gesture: on a phone dragstart never fires, which left the
+// planner readable but not usable there. Tapping "+ Add" on a meal arms a slot,
+// opens the library, and the next card tapped goes into it.
+
+function startPick(day,meal){
+  pendingSlot={day,meal};
+  pickBanner.hidden=false;
+  pickBanner.textContent="";
+  const label=document.createElement("span");
+  label.textContent=`Tap a recipe for ${dayNames[parseISO(day).getDay()]} · ${meal}`;
+  const spacer=document.createElement("span"); spacer.className="spacer";
+  const cancel=document.createElement("button");
+  cancel.className="linkish"; cancel.textContent="Cancel";
+  cancel.onclick=()=>{ cancelPick(); if(isMobile()) setLibraryOpen(false) };
+  pickBanner.append(label,spacer,cancel);
+  setLibraryOpen(true,false);
+  renderLibrary();
+  sidebar.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function cancelPick(){
+  pendingSlot=null;
+  pickBanner.hidden=true;
+  pickBanner.textContent="";
+  renderLibrary();
+}
+
+function placeInPendingSlot(id){
+  const {day,meal}=pendingSlot;
+  const plan=loadPlan(), key=slotKey(day,meal);
+  plan[key]=(plan[key]||[]).concat(id);
+  savePlan(plan);
+  cancelPick();
+  // Back to the day it went on, with the library out of the way again.
+  if(isMobile()) setLibraryOpen(false,false);
+  currentDay=dayIndexOf(day);
+  renderWeek();
+  week.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
 function renderFilters(){
   const cats=["All","Breakfast","Lunch","Dinner","Other","School Lunch"];
   filters.innerHTML=cats.map(c=>`<button class="filter ${c===activeFilter?'active':''}" data-f="${c}">${c}</button>`).join("");
@@ -333,8 +482,15 @@ function renderLibrary(){
       <div class="recipe-body"><div class="recipe-title">${esc(r.title)}</div>
       <div class="tags">${[r.category,...(r.tags||[])].slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div></div>
     </div>`).join("");
+  libraryCount.textContent=shown.length+(shown.length===1?" card":" cards");
   recipeGrid.querySelectorAll(".recipe").forEach(el=>{
     el.addEventListener("dragstart",e=>{dragPayload={type:"library",recipeId:el.dataset.id}; e.dataTransfer.setData("text/plain",JSON.stringify(dragPayload))});
+    // Only while a slot is waiting — otherwise a stray tap on the desktop
+    // would silently plan a meal.
+    if(pendingSlot){
+      el.classList.add("pickable");
+      el.addEventListener("click",()=>placeInPendingSlot(el.dataset.id));
+    }
   });
   recipeGrid.querySelectorAll("[data-open]").forEach(b=>b.onclick=e=>{e.stopPropagation();openRecipe(b.dataset.open)});
   recipeGrid.querySelectorAll("[data-edit]").forEach(b=>b.onclick=e=>{e.stopPropagation();openEdit(b.dataset.edit)});
@@ -387,6 +543,7 @@ editSheet.onclick=e=>{ if(e.target===editSheet) closeEdit() };
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape") return;
   closeEdit(); modal.classList.remove("open");
+  if(pendingSlot) cancelPick();
 });
 
 editSave.onclick=async()=>{
@@ -449,6 +606,73 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;","
 const meals=["Breakfast","Lunch","Dinner","Other"];
 const dayNames=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
+// Comparing the rendered dates rather than subtracting them: across a
+// daylight-saving boundary a week is not seven exact days, and dividing by
+// 86400000 would land a day out.
+function dayIndexOf(dateStr){
+  for(let i=0;i<7;i++) if(iso(datePlus(currentWeekStart,i))===dateStr) return i;
+  return 0;
+}
+
+// "instant", not "auto": auto defers to the CSS scroll-behavior, which is
+// smooth here, so restoring a position after a re-render would animate — and a
+// mandatory snap can interrupt that animation anywhere along the week. The
+// second pass on the next frame is for the first render, where the flex row
+// has not been laid out yet and every offsetLeft is still zero.
+// While the carousel is being scrolled to a day on purpose, the scroll events
+// it emits on the way are not the reader choosing a day — reading them would
+// walk the highlight backwards through the week and then correct itself.
+let scrollingTo=null, scrollingToTimer;
+function scrollToDay(i,smooth){
+  if(!isMobile()) return;
+  scrollingTo=i;
+  clearTimeout(scrollingToTimer);
+  scrollingToTimer=setTimeout(()=>{scrollingTo=null}, smooth===false?80:800);
+  const go=()=>{
+    const el=week.children[i], first=week.children[0];
+    if(!el||!first) return;
+    week.scrollTo({left: el.offsetLeft-first.offsetLeft, behavior: smooth===false?"instant":"smooth"});
+  };
+  go();
+  if(smooth===false) requestAnimationFrame(go);
+}
+
+function renderDots(){
+  const plan=loadPlan();
+  dayDots.innerHTML=dayNames.map((name,i)=>{
+    const d=datePlus(currentWeekStart,i), dk=iso(d);
+    const has=meals.some(m=>(plan[slotKey(dk,m)]||[]).length);
+    return `<button class="day-dot${i===currentDay?" on":""}${has?" has":""}" data-day-i="${i}">
+      <span class="dd-n">${name.slice(0,3).toUpperCase()}</span>
+      <span class="dd-d">${d.getDate()}</span>
+      <span class="dd-mark"></span></button>`;
+  }).join("");
+  dayDots.querySelectorAll("[data-day-i]").forEach(b=>b.onclick=()=>{
+    currentDay=Number(b.dataset.dayI); renderDots(); scrollToDay(currentDay);
+  });
+}
+
+// Which day the carousel settled on, so the strip above it agrees. Debounced:
+// this fires continuously through a swipe and only the resting place matters.
+let dotTimer;
+week.addEventListener("scroll",()=>{
+  if(!isMobile()||scrollingTo!==null) return;
+  clearTimeout(dotTimer);
+  dotTimer=setTimeout(()=>{
+    const first=week.children[0], second=week.children[1];
+    if(!first||!second) return;
+    const step=second.offsetLeft-first.offsetLeft;
+    const i=Math.max(0,Math.min(6,Math.round(week.scrollLeft/step)));
+    if(i!==currentDay){ currentDay=i; renderDots() }
+  },90);
+});
+
+// Landing on a new week: today if it is in view, otherwise the Sunday.
+function focusDayOfWeek(){
+  const now=new Date();
+  currentDay = iso(weekStartOf(now))===iso(currentWeekStart) ? now.getDay() : 0;
+}
+
 function renderWeek(){
   const end=datePlus(currentWeekStart,6);
   weekLabel.textContent=`${currentWeekStart.toLocaleDateString(undefined,{month:"short",day:"numeric"})} – ${end.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})}`;
@@ -461,13 +685,18 @@ function renderWeek(){
     </section>`
   }).join("");
   attachDropHandlers();
+  renderDots();
+  // The list was just rebuilt, so the scroll position went with it. Put it
+  // back without an animation: a drop or a delete must not look like a swipe.
+  scrollToDay(currentDay,false);
 }
 function renderSlot(plan,dk,meal){
   const ids=plan[slotKey(dk,meal)]||[];
   return `<div class="meal-section"><div class="meal-head">${meal}</div>
   <div class="dropzone" data-day="${dk}" data-meal="${meal}">
-    ${ids.length?ids.map((id,index)=>planCard(id,dk,meal,index)).join(""):`<div class="empty">Drop recipe here</div>`}
-  </div></div>`;
+    ${ids.length?ids.map((id,index)=>planCard(id,dk,meal,index)).join(""):`<div class="empty"><span class="e-drag">Drop recipe here</span><span class="e-tap">Nothing planned</span></div>`}
+  </div>
+  <button class="add-to-slot" data-add="${dk}|${meal}">+ Add</button></div>`;
 }
 function planCard(id,day,meal,index){
   const r=recipeById(id); if(!r)return "";
@@ -510,11 +739,15 @@ function attachDropHandlers(){
     const [day,meal,index]=b.dataset.remove.split("|"), plan=loadPlan(), key=slotKey(day,meal);
     plan[key]?.splice(Number(index),1);savePlan(plan);renderWeek();
   });
+  document.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{
+    const [day,meal]=b.dataset.add.split("|");
+    startPick(day,meal);
+  });
   document.querySelectorAll("[data-view]").forEach(el=>el.onclick=()=>openRecipe(el.dataset.view));
 }
-prevWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,-7);renderWeek()}
-nextWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,7);renderWeek()}
-todayWeek.onclick=()=>{currentWeekStart=weekStartOf(new Date());renderWeek()}
+prevWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,-7);focusDayOfWeek();renderWeek()}
+nextWeek.onclick=()=>{currentWeekStart=datePlus(currentWeekStart,7);focusDayOfWeek();renderWeek()}
+todayWeek.onclick=()=>{currentWeekStart=weekStartOf(new Date());focusDayOfWeek();renderWeek()}
 clearWeek.onclick=()=>{
   if(!confirm("Clear all meals from this week?")) return;
   // An emptied week goes up like any other edit; the server drops a week with
@@ -805,6 +1038,7 @@ addUpload.onclick=async()=>{
 function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f)})}
 
 migrateToSundayWeeks();
+initLibraryOpen();
 rebuildRecipes();
 renderFilters();renderLibrary();renderWeek();loadCustom();loadPlans();
 </script>

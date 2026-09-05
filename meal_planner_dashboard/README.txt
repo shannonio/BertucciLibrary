@@ -18,7 +18,15 @@ Features:
   card from the library from the same dialog. Removing is reversible: it only
   takes the card out of the picker, so weeks that already use it are untouched,
   and "Restore all" in the sidebar brings removed cards back.
-- Print the current week in a landscape weekly-plan layout.
+- Print the current week in a landscape weekly-plan layout (desktop only — the
+  button is hidden on a phone).
+- On a phone or a narrow window the layout changes: the recipe library folds up
+  into a heading you tap to open, and the week becomes one day per screen that
+  you swipe through, with a strip of the seven days above it to jump between
+  them. A dot under a day means something is planned on it.
+- Tap "+ Add" under a meal to put a recipe there. Dragging is a mouse gesture
+  and does not work by touch, so this is the way to plan on an iPad or phone;
+  it opens the library, and the next card you tap goes into that meal.
 
 Keep the assets folder beside index.html so the full-resolution built-in recipe
 cards open correctly.
