@@ -125,6 +125,58 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
 .sheet-box textarea{resize:vertical;line-height:1.45;font-size:12.5px}
 .sheet-box{max-height:92vh;overflow:auto}
 .sheet-note{font-size:11.5px;color:var(--muted);line-height:1.45;margin:0}
+/* ------------------------------------------------------------------ display
+   A week on a screen on the kitchen wall: nothing to press, nothing to read
+   from two feet away, and the photographs given the whole column. Every
+   control is gone — this is the one view where the picture is the entire
+   point, so empty meals are dropped rather than drawn as empty boxes and what
+   is left divides the height between the meals that exist. */
+body.display{background:var(--paper);cursor:none}
+body.display header,body.display .sidebar,body.display .planner-tools,
+body.display .day-dots,body.display .shop-panel,body.display .add-to-slot,
+body.display .remove,body.display .card-actions{display:none!important}
+body.display .app{min-height:100vh;grid-template-rows:auto 1fr}
+body.display .layout{grid-template-columns:1fr;height:calc(100vh - 62px)}
+body.display .planner{padding:0 18px 18px;overflow:hidden;display:flex}
+body.display .week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px;min-width:0;width:100%;overflow:visible}
+body.display .day{min-height:0;display:flex;flex-direction:column;border-radius:16px;background:rgba(255,250,242,.9)}
+body.display .day-head{padding:13px 15px;flex:0 0 auto}
+body.display .day-name{font-size:20px}
+body.display .day-date{font-size:13px}
+/* Every card the same size across the whole week, and the stack centred in its
+   column. Letting each day stretch its pictures to fill the height it happened
+   to divide up makes Sunday's dinner twice Wednesday's for no reason; equal
+   sizes read as a set, and a quiet day simply has more space around it. */
+body.display .day-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+body.display .meal-section{flex:0 1 auto;min-height:0;padding:7px 0;border-bottom:1px dashed #e4dacb}
+body.display .meal-section:last-child{border-bottom:0}
+body.display .meal-head{font-size:11px;padding:0 13px;margin:0 0 5px}
+body.display .dropzone{margin:0;border:0;background:none;padding:0;min-height:0}
+body.display .plan-card{border:0;background:none}
+/* contain rather than cover: the built-in cards are all 3:2 so it fills the
+   box exactly, and an oddly-shaped upload letterboxes instead of losing half
+   of the recipe off the sides. */
+body.display .plan-card img{width:100%;height:auto;aspect-ratio:3/2;object-fit:contain;background:none}
+body.display .plan-card-title{flex:0 0 auto;font-size:14px;line-height:1.25;padding:6px 13px 2px;text-align:center;color:var(--ink)}
+body.display .day-empty{flex:1;display:grid;place-items:center;font-size:12px;color:#c3bbaf}
+
+.display-bar{display:flex;align-items:center;gap:12px;padding:12px 20px;background:rgba(255,250,242,.97);border-bottom:1px solid var(--line)}
+.display-bar[hidden]{display:none}
+.display-bar .spacer{flex:1}
+.display-week{font-family:Georgia,serif;font-size:23px;font-weight:700;color:var(--sage-dark)}
+/* The way out has to be reachable, so the cursor comes back near it. */
+.display-bar,.display-bar *{cursor:auto}
+body.display .display-bar #displayExit{opacity:.25;transition:opacity .2s}
+body.display .display-bar:hover #displayExit{opacity:1}
+
+@media(max-width:900px){
+  body.display .layout{height:auto}
+  body.display .planner{display:block;padding:0 10px 10px}
+  body.display .week{grid-template-columns:1fr;gap:10px}
+  body.display .day{min-height:0}
+  body.display .plan-card img{aspect-ratio:3/2}
+}
+
 /* The shopping list on screen. Shut by default — it is a thing you open when
    you are going out, not a thing that should push the week off the top of a
    phone every time the page loads. */
@@ -242,7 +294,14 @@ header{background:rgba(255,250,242,.97);border-bottom:1px solid var(--line);padd
     <button class="btn" id="nextWeek">→</button>
   </div>
   <button class="btn print-week" id="printWeek">Print Week</button>
+  <button class="btn print-week" id="displayBtn" title="Full-screen view for the kitchen screen">Display</button>
 </div></header>
+
+<div class="display-bar" id="displayBar" hidden>
+  <span class="display-week" id="displayWeek"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="displayExit">Exit</button>
+</div>
 
 <div class="layout">
 <aside class="sidebar" id="sidebar">
@@ -627,6 +686,7 @@ editCancel.onclick=closeEdit;
 editSheet.onclick=e=>{ if(e.target===editSheet) closeEdit() };
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape") return;
+  if(displayMode && !modal.classList.contains("open")) return setDisplayMode(false);
   closeEdit(); modal.classList.remove("open");
   if(pendingSlot) cancelPick();
 });
@@ -784,13 +844,21 @@ function focusDayOfWeek(){
 
 function renderWeek(){
   const end=datePlus(currentWeekStart,6);
-  weekLabel.textContent=`${currentWeekStart.toLocaleDateString(undefined,{month:"short",day:"numeric"})} – ${end.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})}`;
+  const range=`${currentWeekStart.toLocaleDateString(undefined,{month:"short",day:"numeric"})} – ${end.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})}`;
+  weekLabel.textContent=range;
+  displayWeek.textContent=`Week of ${range}`;
   const plan=loadPlan();
   week.innerHTML=dayNames.map((name,i)=>{
     const d=datePlus(currentWeekStart,i), dk=iso(d);
+    // On the wall an empty meal is not information, it is a grey box taking
+    // height away from the pictures either side of it.
+    const shown=displayMode ? meals.filter(m=>(plan[slotKey(dk,m)]||[]).length) : meals;
+    const body=shown.length
+      ? shown.map(m=>renderSlot(plan,dk,m)).join("")
+      : `<div class="day-empty">Nothing planned</div>`;
     return `<section class="day">
       <div class="day-head"><div class="day-name">${name}</div><div class="day-date">${d.toLocaleDateString(undefined,{month:"short",day:"numeric"})}</div></div>
-      ${meals.map(m=>renderSlot(plan,dk,m)).join("")}
+      ${displayMode?`<div class="day-body">${body}</div>`:body}
     </section>`
   }).join("");
   attachDropHandlers();
@@ -810,13 +878,26 @@ function renderSlot(plan,dk,meal){
 }
 function planCard(id,day,meal,index){
   const r=recipeById(id); if(!r)return "";
-  return `<div class="plan-card" draggable="true" data-rid="${id}" data-day="${day}" data-meal="${meal}" data-index="${index}">
-    <img src="${r.thumb||r.image}" alt="" data-view="${id}">
+  // The thumbnail everywhere, the wall screen included. A week is seven
+  // columns, so a card is never wider than a seventh of the screen — 548px on
+  // a 4K panel — which the 510px thumbnail already covers. Eleven of the
+  // 1536px originals is 60MB of decoded bitmap on one page, and Chrome
+  // answers that by dropping most of them: they report as loaded and paint as
+  // nothing. Bigger source, blank wall.
+  return `<div class="plan-card" draggable="${!displayMode}" data-rid="${id}" data-day="${day}" data-meal="${meal}" data-index="${index}">
+    <img src="${r.thumb||r.image}" alt="" data-view="${id}" decoding="async">
     <div class="plan-card-title" data-view="${id}">${esc(r.title)}</div>
     <button class="remove" data-remove="${day}|${meal}|${index}" title="Remove">×</button>
   </div>`;
 }
 function attachDropHandlers(){
+  // View only means the plan cannot change by accident. Tapping a card still
+  // opens the full recipe — that is worth having on a kitchen screen — but
+  // nothing here can move a meal or remove one.
+  if(displayMode){
+    document.querySelectorAll("[data-view]").forEach(el=>el.onclick=()=>openRecipe(el.dataset.view));
+    return;
+  }
   document.querySelectorAll(".dropzone").forEach(z=>{
     z.addEventListener("dragover",e=>{e.preventDefault();z.classList.add("dragover")});
     z.addEventListener("dragleave",()=>z.classList.remove("dragover"));
@@ -958,6 +1039,35 @@ function buildShoppingList(){
     shopping.appendChild(note);
   }
 }
+
+// ------------------------------------------------------------- display mode
+//
+// A URL flag rather than a second page: the week, the plan, the polling and
+// the rendering are all already here, and a copy of them would be a copy to
+// keep in step. ?display is bookmarkable, which is what a kitchen screen
+// actually needs — it is opened once and never touched again.
+
+let displayMode=new URLSearchParams(location.search).has("display");
+let displayTimer=null;
+
+function setDisplayMode(on){
+  displayMode=on;
+  document.body.classList.toggle("display",on);
+  displayBar.hidden=!on;
+  const url=new URL(location.href);
+  if(on) url.searchParams.set("display",""); else url.searchParams.delete("display");
+  history.replaceState(null,"",url.pathname+(url.search==="?"?"":url.search));
+
+  clearInterval(displayTimer);
+  // Nothing ever focuses a screen on a wall, so the visibility and focus
+  // refreshes never fire for it. This is the only view that has to poll.
+  if(on) displayTimer=setInterval(()=>{ if(plansShared()) refreshPlans() }, 90000);
+
+  renderWeek();
+}
+
+displayBtn.onclick=()=>setDisplayMode(true);
+displayExit.onclick=()=>setDisplayMode(false);
 
 // ------------------------------------------------------- the list on screen
 //
@@ -1384,6 +1494,7 @@ function fileToDataURL(f){return new Promise((res,rej)=>{const r=new FileReader(
 migrateToSundayWeeks();
 initLibraryOpen();
 initShopOpen();
+if(displayMode) setDisplayMode(true);
 rebuildRecipes();
 renderFilters();renderLibrary();renderWeek();loadCustom();loadPlans();
 </script>
