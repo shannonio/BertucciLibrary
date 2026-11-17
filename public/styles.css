@@ -226,6 +226,98 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 .grid.list .open-link svg { width: 15px; height: 15px; }
 
+/* ------------------------------------------------------------- shelf view */
+
+.chips[hidden] { display: none; }
+
+.grid.shelf { display: block; padding: 14px 10px 4px; }
+
+/* One flex row per shelf. Every spine's hit area is exactly one shelf tall, so
+   rows line up with the repeating plank gradient regardless of spine height. */
+.bookcase {
+  --row: 150px; --plank: 15px;
+  --wall: #4a3222; --wall-2: #2e1f15;
+  --wood: #b07a4c; --wood-hi: #d4a577; --wood-lo: #7c4f2e;
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  row-gap: var(--plank); column-gap: 1.5px;
+  padding: 12px 10px var(--plank);
+  border: 9px solid var(--wood-lo); border-top-width: 11px; border-radius: 6px;
+  background:
+    repeating-linear-gradient(to bottom,
+      rgba(0,0,0,.38) 0, transparent 12px,
+      transparent var(--row),
+      var(--wood-hi) var(--row), var(--wood) calc(var(--row) + 4px),
+      var(--wood-lo) calc(var(--row) + var(--plank))),
+    linear-gradient(90deg, var(--wall-2), var(--wall) 12%, var(--wall) 88%, var(--wall-2));
+  background-origin: content-box, border-box;
+  box-shadow: var(--shadow), inset 0 0 30px rgba(0,0,0,.35);
+}
+@media (min-width: 620px) { .bookcase { --row: 185px; } }
+@media (prefers-color-scheme: dark) {
+  .bookcase {
+    --wall: #24180f; --wall-2: #140d08;
+    --wood: #6e4a2d; --wood-hi: #8f6743; --wood-lo: #4a2f1b;
+  }
+}
+
+.spine {
+  flex: 0 0 var(--w); width: var(--w); height: var(--row);
+  display: flex; align-items: flex-end;
+  border: 0; padding: 0; background: none; cursor: pointer; font: inherit;
+}
+
+.spine-face {
+  position: relative; width: 100%; height: var(--h);
+  writing-mode: vertical-rl;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 9px 0; overflow: hidden;
+  color: var(--ink);
+  /* Shading across the width sells the rounded back of a bound book. */
+  background:
+    linear-gradient(90deg, rgba(0,0,0,.28), rgba(255,255,255,.14) 28%,
+      rgba(255,255,255,0) 55%, rgba(0,0,0,.32)),
+    var(--c);
+  border-radius: 2px 2px 1px 1px;
+  box-shadow: 0 -1px 0 rgba(255,255,255,.08) inset, 1px 0 2px rgba(0,0,0,.35);
+  transition: transform .18s cubic-bezier(.2,.8,.3,1), background-color .4s;
+}
+.spine:hover .spine-face,
+.spine:focus-visible .spine-face { transform: translateY(-9px); }
+.spine:active .spine-face { transform: translateY(-14px); }
+.spine:focus-visible { outline: none; }
+.spine:focus-visible .spine-face { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+
+.spine-title {
+  min-width: 0; min-height: 0; flex: 0 1 auto;
+  font-family: var(--serif); font-size: var(--fs); font-weight: 600;
+  letter-spacing: .02em; line-height: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.spine-author {
+  flex: 0 0 auto; max-height: 40%; overflow: hidden;
+  font-size: calc(var(--fs) * .72); letter-spacing: .06em; text-transform: uppercase;
+  opacity: .78; white-space: nowrap;
+}
+
+/* Gilt bands near head and tail. */
+.s-bands .spine-face::before,
+.s-bands .spine-face::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 4px;
+  border-top: 1.5px solid; border-bottom: 1.5px solid;
+  color: color-mix(in srgb, #d9b45a 75%, var(--ink));
+  opacity: .85;
+}
+.s-bands .spine-face::before { top: 4px; }
+.s-bands .spine-face::after { bottom: 4px; }
+.s-bands .spine-face { padding: 16px 0; }
+
+/* A printed paper label, like an old library binding. */
+.s-label .spine-title {
+  background: #efe6d0; color: #2a211a;
+  padding: 6px 1px; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.18);
+}
+
 .iconbtn {
   border: 1px solid var(--line); background: var(--surface); cursor: pointer;
   width: 28px; height: 26px; border-radius: 999px; padding: 0;

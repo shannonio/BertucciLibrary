@@ -57,27 +57,33 @@ const state = { q: '', kind: '', offset: 0, total: 0 };
 const PAGE = 60;
 
 // Grid suits books and games, where the cover is the identifier. List suits the
-// thousands of Drive files, where the filename and folder are. Remembered
-// between sessions.
-let view = localStorage.getItem('view') === 'list' ? 'list' : 'grid';
+// thousands of Drive files, where the filename and folder are. Shelf is just
+// for fun: every book as a spine on a bookcase. Remembered between sessions.
+const VIEWS = ['grid', 'list', 'shelf'];
+let view = VIEWS.includes(localStorage.getItem('view')) ? localStorage.getItem('view') : 'grid';
+const nextView = () => VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length];
 
+// Each glyph depicts the mode it's keyed by.
 const VIEW_ICONS = {
-  // Showing a grid icon means "switch to grid", so the icon is the *other* mode.
-  grid: '<rect x="4" y="6" width="16" height="2.5" rx="1"/><rect x="4" y="11" width="16" height="2.5" rx="1"/><rect x="4" y="16" width="16" height="2.5" rx="1"/>',
-  list: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  list: '<rect x="4" y="6" width="16" height="2.5" rx="1"/><rect x="4" y="11" width="16" height="2.5" rx="1"/><rect x="4" y="16" width="16" height="2.5" rx="1"/>',
+  shelf: '<rect x="4" y="5" width="3" height="13" rx=".8"/><rect x="8" y="3" width="3.5" height="15" rx=".8"/><rect x="12.5" y="6" width="2.5" height="12" rx=".8"/><rect x="15.6" y="5.2" width="3" height="13" rx=".8" transform="rotate(12 17 18)"/><rect x="3" y="19" width="18" height="2" rx=".6"/>',
 };
 
 function applyView() {
   $('#grid').classList.toggle('list', view === 'list');
+  $('#grid').classList.toggle('shelf', view === 'shelf');
+  // The shelf is books only, so the kind filters would do nothing there.
+  $('#kind-chips').hidden = view === 'shelf';
   // The icon advertises what you'd get by tapping, not the current state.
-  $('#view-icon').innerHTML = VIEW_ICONS[view];
+  $('#view-icon').innerHTML = VIEW_ICONS[nextView()];
   $('#view-icon').setAttribute('fill', 'currentColor');
   $('#view-icon').setAttribute('stroke', 'none');
-  $('#view-toggle').title = view === 'grid' ? 'Switch to list view' : 'Switch to grid view';
+  $('#view-toggle').title = `Switch to ${nextView()} view`;
 }
 
 $('#view-toggle').addEventListener('click', () => {
-  view = view === 'grid' ? 'list' : 'grid';
+  view = nextView();
   localStorage.setItem('view', view);
   applyView();
   loadLibrary();
@@ -265,6 +271,7 @@ function itemCard(item) {
 let libRequestId = 0;
 
 async function loadLibrary({ append = false } = {}) {
+  if (view === 'shelf') return loadShelf();
   const myId = ++libRequestId;
   const offset = append ? state.offset : 0;
 
@@ -305,6 +312,186 @@ async function loadLibrary({ append = false } = {}) {
   }
 }
 
+// =============================================================== Shelf
+
+/**
+ * Cloth-binding colours for spines whose cover hasn't been sampled yet (or has
+ * no cover at all). Picked per book from a hash, so a spine keeps its colour.
+ */
+const SPINE_CLOTH = [
+  '#7a2e2a', '#2f4a6b', '#3d5a40', '#c9a646', '#e8dfc9', '#5b3a5e',
+  '#a45a32', '#1f2d3a', '#8c8f6a', '#b8463e', '#46667a', '#d8c39a',
+];
+
+/** Small deterministic PRNG per book, so heights and styles are stable. */
+function seeded(text) {
+  let h = 2166136261;
+  for (const ch of String(text)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+}
+
+/** "Kate Narita (illustrated by …)" → "Narita" — what a real spine prints. */
+function spineAuthor(creator) {
+  const first = String(creator || '')
+    .replace(/\s*\([^)]*\)/g, '')
+    .split(/,|;|&| and /)[0]
+    .trim();
+  return first.split(/\s+/).pop() || '';
+}
+
+/** Dark ink on pale spines, cream on dark ones. */
+function inkFor(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#2a211a' : '#f6efe3';
+}
+
+function spineMarkup(item) {
+  const rnd = seeded(item.id + item.title);
+  const genre = String(item.genre || '').toLowerCase();
+  const pages = Number(item.page_count) || 0;
+
+  // Picture books are tall and slim; chapter books and novels get thicker with
+  // page count. Unknown page counts get a plausible middle width.
+  const picture = /picture|board book|search-and-find/.test(genre);
+  const width = pages
+    ? Math.round(Math.min(46, Math.max(13, 10 + pages / 11)))
+    : Math.round(picture ? 13 + rnd() * 6 : 18 + rnd() * 14);
+  const height = Math.round((picture ? 88 : 70) + rnd() * (picture ? 12 : 26));
+
+  const color = SPINE_CLOTH[Math.floor(rnd() * SPINE_CLOTH.length)];
+  const style = ['plain', 'bands', 'label', 'bands'][Math.floor(rnd() * 4)];
+  const author = width >= 19 ? spineAuthor(item.creator) : '';
+  const sampled = item.cover_url && item.cover_url.startsWith('/covers/');
+
+  // Size the lettering to the spine's width, then shrink it until the title
+  // roughly fits its length (measured against the phone-sized 150px shelf).
+  let fs = Math.min(13, width * 0.42);
+  const room = 150 * height / 100 - 20 - (author ? author.length * fs * 0.5 + 6 : 0);
+  fs = Math.max(8.5, Math.min(fs, room / (String(item.title).length * 0.52)));
+
+  return `<button class="spine s-${style}" data-id="${item.id}"
+      ${sampled ? `data-cover="${esc(item.cover_url)}"` : ''}
+      title="${esc(item.title)}${item.creator ? ` — ${esc(item.creator)}` : ''}"
+      style="--w:${width}px;--h:${height}%;--c:${color};--ink:${inkFor(color)};--fs:${fs.toFixed(1)}px">
+    <span class="spine-face">
+      <span class="spine-title">${esc(item.title)}</span>
+      ${author ? `<span class="spine-author">${esc(author)}</span>` : ''}
+    </span>
+  </button>`;
+}
+
+/**
+ * Colour each spine from its real cover, as it scrolls into view. Only locally
+ * cached covers are sampled: they're same-origin, so the canvas isn't tainted,
+ * and they load in a couple of milliseconds. Results are remembered so the
+ * shelf comes up in full colour next time.
+ */
+const spineColors = (() => {
+  try { return JSON.parse(localStorage.getItem('spineColors') || '{}'); } catch { return {}; }
+})();
+let saveColorsTimer;
+
+function dominantColor(img) {
+  const S = 20;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = S;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, S, S);
+  const { data } = ctx.getImageData(0, 0, S, S);
+
+  // Bucket pixels coarsely and take the busiest bucket, nudged toward
+  // saturated colours — a plain average turns most covers into mud.
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+    const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+    const sat = Math.max(r, g, b) - Math.min(r, g, b);
+    const bk = buckets.get(key) || { n: 0, w: 0, r: 0, g: 0, b: 0 };
+    bk.n++; bk.w += 1 + sat / 64; bk.r += r; bk.g += g; bk.b += b;
+    buckets.set(key, bk);
+  }
+  const best = [...buckets.values()].sort((a, b) => b.w - a.w)[0];
+  const hex = (v) => Math.round(v / best.n).toString(16).padStart(2, '0');
+  return `#${hex(best.r)}${hex(best.g)}${hex(best.b)}`;
+}
+
+function paintSpine(el, color) {
+  el.style.setProperty('--c', color);
+  el.style.setProperty('--ink', inkFor(color));
+}
+
+const spineObserver = new IntersectionObserver((entries) => {
+  for (const { isIntersecting, target } of entries) {
+    if (!isIntersecting) continue;
+    spineObserver.unobserve(target);
+    const src = target.dataset.cover;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        const color = dominantColor(img);
+        spineColors[src] = color;
+        paintSpine(target, color);
+        clearTimeout(saveColorsTimer);
+        saveColorsTimer = setTimeout(() => {
+          try { localStorage.setItem('spineColors', JSON.stringify(spineColors)); } catch { /* full */ }
+        }, 800);
+      } catch { /* keep the cloth colour */ }
+    };
+    img.src = src;
+  }
+}, { rootMargin: '300px 0px' });
+
+/** The shelf shows every book at once, so page through the API in full. */
+async function loadShelf() {
+  const myId = ++libRequestId;
+  const grid = $('#grid');
+  grid.innerHTML = '';
+  $('#lib-spinner').hidden = false;
+  $('#lib-empty').hidden = true;
+  $('#load-more').hidden = true;
+
+  try {
+    const books = [];
+    for (let total = Infinity; books.length < total; ) {
+      const params = new URLSearchParams({ kind: 'book', limit: 200, offset: books.length });
+      if (state.q) params.set('q', state.q);
+      const data = await api(`/api/items?${params}`);
+      if (myId !== libRequestId) return; // superseded by a newer keystroke
+      books.push(...data.items);
+      total = data.total;
+      if (!data.items.length) break;
+    }
+
+    spineObserver.disconnect();
+    grid.innerHTML = `<div class="bookcase">${books.map(spineMarkup).join('')}</div>`;
+    for (const el of grid.querySelectorAll('.spine[data-cover]')) {
+      const known = spineColors[el.dataset.cover];
+      if (known) paintSpine(el, known);
+      else spineObserver.observe(el);
+    }
+
+    $('#lib-count').textContent = books.length
+      ? `${books.length.toLocaleString()} book${books.length === 1 ? '' : 's'}`
+      : '';
+    if (!books.length) {
+      $('#lib-empty').hidden = false;
+      $('#lib-empty-sub').textContent = state.q
+        ? `No books match “${state.q}”.`
+        : 'No books on the shelf yet.';
+    }
+  } catch (err) {
+    if (myId === libRequestId) toast(err.message);
+  } finally {
+    if (myId === libRequestId) $('#lib-spinner').hidden = true;
+  }
+}
+
 // Debounced search-as-you-type.
 let searchTimer;
 $('#search').addEventListener('input', (e) => {
@@ -329,7 +516,7 @@ $('#load-more').addEventListener('click', () => loadLibrary({ append: true }));
 $('#grid').addEventListener('click', (e) => {
   // Ignore clicks on the open-in-Drive link, which is a sibling of the hit area.
   if (e.target.closest('.open-link')) return;
-  const btn = e.target.closest('.item-hit');
+  const btn = e.target.closest('.item-hit, .spine');
   if (btn) openDetail(Number(btn.dataset.id));
 });
 
